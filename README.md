@@ -21,7 +21,7 @@ By default, browser requests go to same-origin paths:
 For local development against a remote gateway, set `VITE_NEW_API_ORIGIN` before starting Vite:
 
 ```powershell
-$env:VITE_NEW_API_ORIGIN="https://domaeng.com"
+$env:VITE_NEW_API_ORIGIN="https://api.domaeng.com"
 npm run dev
 ```
 

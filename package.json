@@ -2,7 +2,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "start": "node --experimental-sqlite server/index.mjs",
+    "backup": "node --experimental-sqlite scripts/backup.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.2",

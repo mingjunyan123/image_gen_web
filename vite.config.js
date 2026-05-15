@@ -8,11 +8,11 @@ export default defineConfig({
     host: "127.0.0.1",
     proxy: process.env.VITE_NEW_API_ORIGIN
       ? {
-          "/v1": {
+          "/image-api": {
             target: process.env.VITE_NEW_API_ORIGIN,
             changeOrigin: true,
           },
-          "/v1beta": {
+          "/images": {
             target: process.env.VITE_NEW_API_ORIGIN,
             changeOrigin: true,
           },

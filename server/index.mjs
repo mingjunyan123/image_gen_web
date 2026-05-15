@@ -1,0 +1,773 @@
+import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
+import { createHash, createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.resolve(__dirname, "..");
+const DIST_DIR = path.join(ROOT_DIR, "dist");
+const PUBLIC_INDEX = path.join(DIST_DIR, "index.html");
+
+const PORT = Number(process.env.PORT || 3000);
+const DATA_DIR = process.env.IMAGE_DATA_DIR || "/data/image-service";
+const DB_PATH = path.join(DATA_DIR, "app.db");
+const IMAGE_DIR = path.join(DATA_DIR, "images");
+const NEW_API_BASE_URL = (process.env.NEW_API_BASE_URL || "http://new-api:3000").replace(/\/+$/, "");
+const SERVICE_SECRET = process.env.IMAGE_SERVICE_SECRET || "change-me-image-service-secret";
+const TOKEN_PEPPER = process.env.IMAGE_TOKEN_PEPPER || SERVICE_SECRET;
+const SESSION_DAYS = Number(process.env.IMAGE_SESSION_DAYS || 7);
+const MAX_GLOBAL_PROCESSING = Number(process.env.IMAGE_MAX_GLOBAL_PROCESSING || 1);
+const MAX_TOKEN_PROCESSING = Number(process.env.IMAGE_MAX_TOKEN_PROCESSING || 1);
+const MAX_TOKEN_QUEUED = Number(process.env.IMAGE_MAX_TOKEN_QUEUED || 5);
+const WORKER_INTERVAL_MS = Number(process.env.IMAGE_WORKER_INTERVAL_MS || 1500);
+const REQUEST_TIMEOUT_MS = Number(process.env.IMAGE_REQUEST_TIMEOUT_MS || 600000);
+const MAX_IMAGE_BYTES = Number(process.env.IMAGE_MAX_UPLOAD_BYTES || 50 * 1024 * 1024);
+const SESSION_COOKIE = "image_session";
+
+if (!process.env.IMAGE_SERVICE_SECRET) {
+  console.warn("[image-service] IMAGE_SERVICE_SECRET is not set. Set a long random value before production use.");
+}
+
+await mkdir(DATA_DIR, { recursive: true });
+await mkdir(IMAGE_DIR, { recursive: true });
+await mkdir(path.join(IMAGE_DIR, "sources"), { recursive: true });
+await mkdir(path.join(IMAGE_DIR, "results"), { recursive: true });
+
+const db = new DatabaseSync(DB_PATH);
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
+  PRAGMA busy_timeout = 5000;
+
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    encrypted_token TEXT NOT NULL,
+    token_iv TEXT NOT NULL,
+    token_tag TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    model_key TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    source_image_path TEXT,
+    source_image_name TEXT,
+    source_image_mime TEXT,
+    result_image_path TEXT,
+    result_mime TEXT,
+    image_slug TEXT UNIQUE,
+    error_message TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS backups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    backup_path TEXT NOT NULL,
+    images_archive_path TEXT,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at ASC);
+  CREATE INDEX IF NOT EXISTS idx_jobs_slug ON jobs(image_slug);
+  CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+`);
+
+db.prepare(`
+  UPDATE jobs
+  SET status = 'failed',
+      error_message = '服务重启时任务还没有完成，请重新生成。',
+      finished_at = ?
+  WHERE status = 'processing'
+`).run(Date.now());
+
+function now() {
+  return Date.now();
+}
+
+function randomId(bytes = 18) {
+  return randomBytes(bytes).toString("base64url");
+}
+
+function hashToken(token) {
+  return createHash("sha256").update(TOKEN_PEPPER).update(token).digest("hex");
+}
+
+function encryptionKey() {
+  return createHash("sha256").update(SERVICE_SECRET).digest();
+}
+
+function encryptToken(token) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  return {
+    encrypted: encrypted.toString("base64"),
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+  };
+}
+
+function decryptToken(user) {
+  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(user.token_iv, "base64"));
+  decipher.setAuthTag(Buffer.from(user.token_tag, "base64"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(user.encrypted_token, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+function cleanToken(value) {
+  return String(value || "").trim().replace(/^Bearer\s+/i, "");
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  return Object.fromEntries(header.split(";").map((item) => {
+    const index = item.indexOf("=");
+    if (index === -1) return null;
+    return [decodeURIComponent(item.slice(0, index).trim()), decodeURIComponent(item.slice(index + 1).trim())];
+  }).filter(Boolean));
+}
+
+function sendJson(res, statusCode, payload, headers = {}) {
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": Buffer.byteLength(body),
+    "Cache-Control": "no-store",
+    ...headers,
+  });
+  res.end(body);
+}
+
+function sendError(res, statusCode, message) {
+  sendJson(res, statusCode, { error: message });
+}
+
+function redirect(res, location) {
+  res.writeHead(302, { Location: location });
+  res.end();
+}
+
+async function readBody(req, limit = 1024 * 1024) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > limit) throw httpError(413, "内容太大了，请减少后再试。");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function readJson(req, limit) {
+  const body = await readBody(req, limit);
+  if (!body.length) return {};
+  try {
+    return JSON.parse(body.toString("utf8"));
+  } catch {
+    throw httpError(400, "提交内容格式不正确。");
+  }
+}
+
+function httpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function getSession(req) {
+  const sessionId = parseCookies(req)[SESSION_COOKIE];
+  if (!sessionId) return null;
+  const row = db.prepare(`
+    SELECT s.id AS session_id, s.expires_at, u.*
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.id = ? AND s.expires_at > ?
+  `).get(sessionId, now());
+  return row || null;
+}
+
+function requireSession(req) {
+  const session = getSession(req);
+  if (!session) throw httpError(401, "请先登录。");
+  return session;
+}
+
+function makeSessionCookie(req, sessionId, expiresAt) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "");
+  const isHttps = forwardedProto.includes("https") || req.socket.encrypted;
+  const secure = isHttps ? "; Secure" : "";
+  return `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax${secure}; Expires=${new Date(expiresAt).toUTCString()}`;
+}
+
+function clearSessionCookie(req) {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "");
+  const isHttps = forwardedProto.includes("https") || req.socket.encrypted;
+  const secure = isHttps ? "; Secure" : "";
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax${secure}; Max-Age=0`;
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs || REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function verifyNewApiToken(token) {
+  const response = await fetchWithTimeout(`${NEW_API_BASE_URL}/v1/models`, {
+    headers: { Authorization: `Bearer ${token}` },
+    timeoutMs: 30000,
+  });
+  if (!response.ok) {
+    throw httpError(401, "访问密钥无效，请检查后再试。");
+  }
+}
+
+async function handleLogin(req, res) {
+  const payload = await readJson(req, 128 * 1024);
+  const token = cleanToken(payload.token);
+  if (!token) throw httpError(400, "请输入访问密钥。");
+
+  await verifyNewApiToken(token);
+
+  const tokenHash = hashToken(token);
+  const encrypted = encryptToken(token);
+  const timestamp = now();
+  const existing = db.prepare("SELECT id FROM users WHERE token_hash = ?").get(tokenHash);
+  let userId;
+  if (existing) {
+    userId = existing.id;
+    db.prepare(`
+      UPDATE users
+      SET encrypted_token = ?, token_iv = ?, token_tag = ?, updated_at = ?
+      WHERE id = ?
+    `).run(encrypted.encrypted, encrypted.iv, encrypted.tag, timestamp, userId);
+  } else {
+    const result = db.prepare(`
+      INSERT INTO users (token_hash, encrypted_token, token_iv, token_tag, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(tokenHash, encrypted.encrypted, encrypted.iv, encrypted.tag, timestamp, timestamp);
+    userId = Number(result.lastInsertRowid);
+  }
+
+  const sessionId = randomId(24);
+  const expiresAt = timestamp + SESSION_DAYS * 24 * 60 * 60 * 1000;
+  db.prepare("INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
+    .run(sessionId, userId, expiresAt, timestamp);
+
+  sendJson(res, 200, { authenticated: true }, { "Set-Cookie": makeSessionCookie(req, sessionId, expiresAt) });
+}
+
+function handleSession(req, res) {
+  const session = getSession(req);
+  sendJson(res, 200, {
+    authenticated: Boolean(session),
+    limits: {
+      maxQueued: MAX_TOKEN_QUEUED,
+      maxActive: MAX_TOKEN_PROCESSING,
+    },
+  });
+}
+
+function handleLogout(req, res) {
+  const sessionId = parseCookies(req)[SESSION_COOKIE];
+  if (sessionId) db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+  sendJson(res, 200, { authenticated: false }, { "Set-Cookie": clearSessionCookie(req) });
+}
+
+function contentTypeToExtension(mime, fallback = "png") {
+  if (mime === "image/jpeg" || mime === "image/jpg") return "jpg";
+  if (mime === "image/webp") return "webp";
+  if (mime === "image/png") return "png";
+  return fallback;
+}
+
+function extensionToMime(ext) {
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "webp") return "image/webp";
+  return "image/png";
+}
+
+function safeOutputFormat(value) {
+  return ["png", "jpeg", "webp"].includes(value) ? value : "png";
+}
+
+function normalizeJobParams(input) {
+  const mode = input.mode === "edit" ? "edit" : "generate";
+  const modelKey = input.modelKey === "nano" ? "nano" : "gpt";
+  const prompt = String(input.prompt || "").trim();
+  if (!prompt) throw httpError(400, "请先写下想生成的内容。");
+
+  const outputFormat = safeOutputFormat(input.outputFormat);
+  const params = {
+    mode,
+    modelKey,
+    prompt,
+    size: String(input.size || "1024x1024"),
+    quality: ["auto", "low", "medium", "high"].includes(input.quality) ? input.quality : "auto",
+    outputFormat,
+    outputCompression: Math.min(100, Math.max(1, Number(input.outputCompression || 82))),
+    moderation: input.moderation === "low" ? "low" : "auto",
+    aspectRatio: String(input.aspectRatio || "1:1"),
+    resolution: ["512", "1K", "2K", "4K"].includes(input.resolution) ? input.resolution : "1K",
+  };
+  return params;
+}
+
+function parseMultipartBody(buffer, boundary) {
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  const fields = {};
+  const files = {};
+  let start = buffer.indexOf(boundaryBuffer);
+  while (start !== -1) {
+    start += boundaryBuffer.length;
+    if (buffer[start] === 45 && buffer[start + 1] === 45) break;
+    if (buffer[start] === 13 && buffer[start + 1] === 10) start += 2;
+
+    const headerEnd = buffer.indexOf(Buffer.from("\r\n\r\n"), start);
+    if (headerEnd === -1) break;
+    const headerText = buffer.slice(start, headerEnd).toString("utf8");
+    let partEnd = buffer.indexOf(boundaryBuffer, headerEnd + 4);
+    if (partEnd === -1) break;
+    let dataEnd = partEnd;
+    if (buffer[dataEnd - 2] === 13 && buffer[dataEnd - 1] === 10) dataEnd -= 2;
+
+    const disposition = /content-disposition:\s*form-data;\s*([^\r\n]+)/i.exec(headerText)?.[1] || "";
+    const name = /name="([^"]+)"/i.exec(disposition)?.[1];
+    const filename = /filename="([^"]*)"/i.exec(disposition)?.[1];
+    const mime = /content-type:\s*([^\r\n]+)/i.exec(headerText)?.[1]?.trim() || "application/octet-stream";
+    const data = buffer.slice(headerEnd + 4, dataEnd);
+
+    if (name && filename) {
+      files[name] = { filename, mime, data };
+    } else if (name) {
+      fields[name] = data.toString("utf8");
+    }
+    start = partEnd;
+  }
+  return { fields, files };
+}
+
+async function parseJobRequest(req) {
+  const contentType = String(req.headers["content-type"] || "");
+  if (contentType.startsWith("multipart/form-data")) {
+    const boundary = /boundary=([^;]+)/i.exec(contentType)?.[1];
+    if (!boundary) throw httpError(400, "上传内容格式不正确。");
+    const parsed = parseMultipartBody(await readBody(req, MAX_IMAGE_BYTES + 1024 * 1024), boundary);
+    return { fields: parsed.fields, file: parsed.files.image || null };
+  }
+  return { fields: await readJson(req, 512 * 1024), file: null };
+}
+
+function publicJob(row) {
+  const params = JSON.parse(row.params_json);
+  return {
+    id: row.id,
+    status: row.status,
+    mode: row.mode,
+    modelKey: row.model_key,
+    prompt: params.prompt,
+    params,
+    imageUrl: row.image_slug ? `/images/${row.image_slug}` : null,
+    errorMessage: row.error_message,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+async function createJob(req, res) {
+  const session = requireSession(req);
+  const queued = db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE user_id = ? AND status = 'queued'")
+    .get(session.id).count;
+  if (queued >= MAX_TOKEN_QUEUED) {
+    throw httpError(429, "等待中的作品太多了，请等前面的完成后再提交。");
+  }
+
+  const { fields, file } = await parseJobRequest(req);
+  const params = normalizeJobParams(fields);
+  if (params.mode === "edit" && !file) throw httpError(400, "请先上传一张参考图片。");
+  if (file && !["image/png", "image/jpeg", "image/webp"].includes(file.mime)) {
+    throw httpError(400, "请上传 PNG、JPG 或 WebP 图片。");
+  }
+  if (file && file.data.length > MAX_IMAGE_BYTES) {
+    throw httpError(413, "图片不能超过 50MB。");
+  }
+
+  const jobId = randomId(20);
+  let sourcePath = null;
+  if (file) {
+    const ext = contentTypeToExtension(file.mime);
+    sourcePath = path.join("sources", `${jobId}.${ext}`);
+    await writeImageFile(sourcePath, file.data);
+  }
+
+  const timestamp = now();
+  db.prepare(`
+    INSERT INTO jobs (
+      id, user_id, status, mode, model_key, params_json,
+      source_image_path, source_image_name, source_image_mime, created_at
+    )
+    VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    jobId,
+    session.id,
+    params.mode,
+    params.modelKey,
+    JSON.stringify(params),
+    sourcePath,
+    file?.filename || null,
+    file?.mime || null,
+    timestamp,
+  );
+
+  const row = db.prepare("SELECT * FROM jobs WHERE id = ? AND user_id = ?").get(jobId, session.id);
+  sendJson(res, 201, { job: publicJob(row) });
+}
+
+function listJobs(req, res) {
+  const session = requireSession(req);
+  const rows = db.prepare("SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 80").all(session.id);
+  sendJson(res, 200, { jobs: rows.map(publicJob) });
+}
+
+function getJob(req, res, jobId) {
+  const session = requireSession(req);
+  const row = db.prepare("SELECT * FROM jobs WHERE id = ? AND user_id = ?").get(jobId, session.id);
+  if (!row) throw httpError(404, "没有找到这条作品记录。");
+  sendJson(res, 200, { job: publicJob(row) });
+}
+
+async function writeImageFile(relativePath, buffer) {
+  const fullPath = safeImagePath(relativePath);
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, buffer);
+}
+
+function safeImagePath(relativePath) {
+  const fullPath = path.resolve(IMAGE_DIR, relativePath);
+  if (!fullPath.startsWith(path.resolve(IMAGE_DIR) + path.sep)) {
+    throw new Error("Invalid image path");
+  }
+  return fullPath;
+}
+
+async function handleImage(req, res, slug) {
+  const session = requireSession(req);
+  const row = db.prepare(`
+    SELECT result_image_path, result_mime
+    FROM jobs
+    WHERE image_slug = ? AND user_id = ? AND status = 'succeeded'
+  `).get(slug, session.id);
+  if (!row?.result_image_path) throw httpError(404, "没有找到这张图片。");
+
+  const fullPath = safeImagePath(row.result_image_path);
+  const fileStat = await stat(fullPath).catch(() => null);
+  if (!fileStat?.isFile()) throw httpError(404, "图片文件不存在。");
+
+  res.writeHead(200, {
+    "Content-Type": row.result_mime || "image/png",
+    "Content-Length": fileStat.size,
+    "Cache-Control": "private, max-age=3600",
+  });
+  createReadStream(fullPath).pipe(res);
+}
+
+function buildGeminiBody(params, imagePart = null) {
+  const parts = [{ text: params.prompt }];
+  if (imagePart) {
+    parts.push({
+      inlineData: {
+        mimeType: imagePart.mimeType,
+        data: imagePart.data,
+      },
+    });
+  }
+  return {
+    contents: [{ role: "user", parts }],
+    generationConfig: {
+      responseModalities: ["IMAGE"],
+      responseFormat: {
+        image: {
+          aspectRatio: params.aspectRatio,
+          imageSize: params.resolution,
+        },
+      },
+    },
+  };
+}
+
+function parseGeminiImage(payload) {
+  const parts = payload?.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part?.inlineData?.data) return { b64: part.inlineData.data, mime: part.inlineData.mimeType || "image/png" };
+    if (part?.inline_data?.data) return { b64: part.inline_data.data, mime: part.inline_data.mime_type || "image/png" };
+  }
+  return null;
+}
+
+async function callImageModel(job, token) {
+  const params = JSON.parse(job.params_json);
+  if (params.modelKey === "nano") {
+    const imagePart = job.source_image_path
+      ? {
+          mimeType: job.source_image_mime,
+          data: (await readFile(safeImagePath(job.source_image_path))).toString("base64"),
+        }
+      : null;
+    const response = await fetchWithTimeout(`${NEW_API_BASE_URL}/v1beta/models/gemini-3.1-flash-image:generateContent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(buildGeminiBody(params, imagePart)),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(readUpstreamError(payload, response));
+    const image = parseGeminiImage(payload);
+    if (!image?.b64) throw new Error("生成完成了，但没有收到可保存的图片。");
+    return { buffer: Buffer.from(image.b64, "base64"), mime: image.mime };
+  }
+
+  if (params.mode === "edit") {
+    const formData = new FormData();
+    formData.append("model", "gpt-image-2");
+    formData.append("prompt", params.prompt);
+    formData.append("n", "1");
+    formData.append("size", params.size);
+    formData.append("quality", params.quality);
+    formData.append("output_format", params.outputFormat);
+    formData.append("moderation", params.moderation);
+    formData.append("background", "auto");
+    if (params.outputFormat === "jpeg" || params.outputFormat === "webp") {
+      formData.append("output_compression", String(params.outputCompression));
+    }
+    const source = await readFile(safeImagePath(job.source_image_path));
+    formData.append("image", new Blob([source], { type: job.source_image_mime }), job.source_image_name || "image.png");
+
+    const response = await fetchWithTimeout(`${NEW_API_BASE_URL}/v1/images/edits`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    return await parseOpenAiImageResponse(response, params.outputFormat);
+  }
+
+  const body = {
+    model: "gpt-image-2",
+    prompt: params.prompt,
+    n: 1,
+    size: params.size,
+    quality: params.quality,
+    output_format: params.outputFormat,
+    moderation: params.moderation,
+  };
+  if (params.outputFormat === "jpeg" || params.outputFormat === "webp") {
+    body.output_compression = params.outputCompression;
+  }
+  const response = await fetchWithTimeout(`${NEW_API_BASE_URL}/v1/images/generations`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  return await parseOpenAiImageResponse(response, params.outputFormat);
+}
+
+async function parseOpenAiImageResponse(response, outputFormat) {
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(readUpstreamError(payload, response));
+  const first = payload?.data?.[0];
+  if (first?.b64_json) {
+    return {
+      buffer: Buffer.from(first.b64_json, "base64"),
+      mime: outputFormat === "jpeg" ? "image/jpeg" : `image/${outputFormat}`,
+    };
+  }
+  if (first?.url) {
+    const imageResponse = await fetchWithTimeout(first.url, { timeoutMs: REQUEST_TIMEOUT_MS });
+    if (!imageResponse.ok) throw new Error("图片已经生成，但下载保存失败。");
+    return {
+      buffer: Buffer.from(await imageResponse.arrayBuffer()),
+      mime: imageResponse.headers.get("content-type")?.split(";")[0] || "image/png",
+    };
+  }
+  throw new Error("生成完成了，但没有收到可保存的图片。");
+}
+
+function readUpstreamError(payload, response) {
+  return payload?.error?.message || payload?.message || payload?.detail || `生成失败，请稍后重试。(${response.status})`;
+}
+
+let workerRunning = false;
+
+async function workerTick() {
+  if (workerRunning) return;
+  workerRunning = true;
+  try {
+    while (true) {
+      const active = db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'processing'").get().count;
+      if (active >= MAX_GLOBAL_PROCESSING) return;
+
+      const job = db.prepare(`
+        SELECT j.*, u.encrypted_token, u.token_iv, u.token_tag
+        FROM jobs j
+        JOIN users u ON u.id = j.user_id
+        WHERE j.status = 'queued'
+          AND (
+            SELECT COUNT(*)
+            FROM jobs p
+            WHERE p.user_id = j.user_id AND p.status = 'processing'
+          ) < ?
+        ORDER BY j.created_at ASC
+        LIMIT 1
+      `).get(MAX_TOKEN_PROCESSING);
+      if (!job) return;
+
+      const started = now();
+      const claimed = db.prepare(`
+        UPDATE jobs
+        SET status = 'processing', attempts = attempts + 1, started_at = ?, error_message = NULL
+        WHERE id = ? AND status = 'queued'
+      `).run(started, job.id);
+      if (claimed.changes !== 1) continue;
+
+      processJob(job).catch((error) => {
+        console.error(`[image-service] job ${job.id} failed`, error);
+      });
+    }
+  } finally {
+    workerRunning = false;
+  }
+}
+
+async function processJob(job) {
+  try {
+    const token = decryptToken(job);
+    const image = await callImageModel(job, token);
+    const ext = contentTypeToExtension(image.mime);
+    const slug = `${randomId(24)}.${ext}`;
+    const relativePath = path.join("results", new Date().toISOString().slice(0, 10), slug);
+    await writeImageFile(relativePath, image.buffer);
+    db.prepare(`
+      UPDATE jobs
+      SET status = 'succeeded',
+          result_image_path = ?,
+          result_mime = ?,
+          image_slug = ?,
+          finished_at = ?,
+          error_message = NULL
+      WHERE id = ?
+    `).run(relativePath, image.mime || extensionToMime(ext), slug, now(), job.id);
+  } catch (error) {
+    db.prepare(`
+      UPDATE jobs
+      SET status = 'failed', error_message = ?, finished_at = ?
+      WHERE id = ?
+    `).run(error.message || "生成失败，请稍后重试。", now(), job.id);
+  }
+}
+
+setInterval(workerTick, WORKER_INTERVAL_MS).unref();
+workerTick();
+
+const staticTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+};
+
+async function serveStatic(req, res, pathname) {
+  if (pathname === "/image") return redirect(res, "/image/");
+  let relative = decodeURIComponent(pathname.replace(/^\/image\/?/, ""));
+  if (!relative) relative = "index.html";
+  let fullPath = path.resolve(DIST_DIR, relative);
+  if (!fullPath.startsWith(path.resolve(DIST_DIR) + path.sep) && fullPath !== path.resolve(DIST_DIR)) {
+    throw httpError(404, "Not found");
+  }
+  let fileStat = await stat(fullPath).catch(() => null);
+  if (!fileStat?.isFile()) {
+    fullPath = PUBLIC_INDEX;
+    fileStat = await stat(fullPath).catch(() => null);
+  }
+  if (!fileStat?.isFile()) throw httpError(404, "页面文件不存在，请先构建前端。");
+
+  const ext = path.extname(fullPath).toLowerCase();
+  res.writeHead(200, {
+    "Content-Type": staticTypes[ext] || "application/octet-stream",
+    "Content-Length": fileStat.size,
+    "Cache-Control": ext === ".html" ? "no-store" : "public, max-age=31536000, immutable",
+  });
+  createReadStream(fullPath).pipe(res);
+}
+
+async function route(req, res) {
+  const url = new URL(req.url || "/", "http://localhost");
+  const pathname = url.pathname;
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  if (pathname === "/health") return sendJson(res, 200, { ok: true });
+  if (pathname === "/image" || pathname.startsWith("/image/")) return await serveStatic(req, res, pathname);
+
+  if (pathname === "/image-api/auth/login" && req.method === "POST") return await handleLogin(req, res);
+  if (pathname === "/image-api/auth/session" && req.method === "GET") return handleSession(req, res);
+  if (pathname === "/image-api/auth/logout" && req.method === "POST") return handleLogout(req, res);
+  if (pathname === "/image-api/jobs" && req.method === "POST") return await createJob(req, res);
+  if (pathname === "/image-api/jobs" && req.method === "GET") return listJobs(req, res);
+  const jobMatch = /^\/image-api\/jobs\/([^/]+)$/.exec(pathname);
+  if (jobMatch && req.method === "GET") return getJob(req, res, jobMatch[1]);
+  const imageMatch = /^\/images\/([^/]+)$/.exec(pathname);
+  if (imageMatch && req.method === "GET") return await handleImage(req, res, imageMatch[1]);
+
+  sendError(res, 404, "Not found");
+}
+
+createServer((req, res) => {
+  route(req, res).catch((error) => {
+    const statusCode = error.statusCode || 500;
+    if (statusCode >= 500) console.error("[image-service]", error);
+    sendError(res, statusCode, error.message || "服务暂时不可用，请稍后重试。");
+  });
+}).listen(PORT, () => {
+  console.log(`[image-service] listening on :${PORT}`);
+});

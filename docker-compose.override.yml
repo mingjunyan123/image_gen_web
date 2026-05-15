@@ -1,7 +1,7 @@
 services:
   image-service:
     build:
-      context: ..
+      context: /opt/image-web
       dockerfile: Dockerfile
     container_name: image-service
     restart: always
@@ -16,12 +16,8 @@ services:
       IMAGE_MAX_TOKEN_PROCESSING: "1"
       IMAGE_MAX_TOKEN_QUEUED: "5"
     volumes:
-      - ../image-service-data:/data/image-service
+      - ./image-service-data:/data/image-service
     expose:
       - "3000"
     networks:
       - ai-gateway
-
-networks:
-  ai-gateway:
-    external: true

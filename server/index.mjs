@@ -317,6 +317,12 @@ function safeOutputFormat(value) {
   return ["png", "jpeg", "webp"].includes(value) ? value : "png";
 }
 
+const NANO_ASPECT_RATIOS = new Set(["1:8", "8:1", "1:4", "4:1", "9:16", "16:9", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "1:1", "21:9"]);
+
+function safeNanoAspectRatio(value) {
+  return NANO_ASPECT_RATIOS.has(value) ? value : "1:1";
+}
+
 const GPT_MAX_LONG_SIDE = 3840;
 const GPT_MAX_SHORT_SIDE = 2160;
 
@@ -383,7 +389,7 @@ function normalizeJobParams(input) {
     outputFormat,
     outputCompression,
     moderation: input.moderation === "low" ? "low" : "auto",
-    aspectRatio: String(input.aspectRatio || "1:1"),
+    aspectRatio: safeNanoAspectRatio(String(input.aspectRatio || "1:1")),
     resolution: ["512", "1K", "2K", "4K"].includes(input.resolution) ? input.resolution : "1K",
   };
   return params;

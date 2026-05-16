@@ -712,14 +712,34 @@ textarea:focus {
   }
 
   .topBar {
-    display: grid;
+    align-items: center;
+    margin-bottom: 16px;
   }
 
   .dashboardGrid,
-  .modelGrid,
   .twoCols,
   .jobList {
     grid-template-columns: 1fr;
+  }
+
+  .topBar h1 {
+    margin-bottom: 0;
+    font-size: 28px;
+  }
+
+  .modelGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .modelChoice {
+    min-width: 0;
+    padding: 10px 6px;
+  }
+
+  .modelChoice strong {
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    line-height: 1.2;
   }
 
   .controlPanel,

@@ -47,11 +47,17 @@ const modelOptions = [
 ];
 
 const gptAspectOptions = [
-  { value: "1:1", label: "方图 1:1" },
-  { value: "3:2", label: "横图 3:2" },
-  { value: "2:3", label: "竖图 2:3" },
-  { value: "16:9", label: "宽屏 16:9" },
+  { value: "9:21", label: "竖屏 9:21" },
+  { value: "21:9", label: "宽屏 21:9" },
   { value: "9:16", label: "竖屏 9:16" },
+  { value: "16:9", label: "宽屏 16:9" },
+  { value: "2:3", label: "竖图 2:3" },
+  { value: "3:2", label: "横图 3:2" },
+  { value: "3:4", label: "竖图 3:4" },
+  { value: "4:3", label: "横图 4:3" },
+  { value: "4:5", label: "竖图 4:5" },
+  { value: "5:4", label: "横图 5:4" },
+  { value: "1:1", label: "方图 1:1" },
 ];
 
 const gptResolutionOptions = [
@@ -63,24 +69,42 @@ const gptResolutionOptions = [
 const gptSizeMap = {
   "1K": {
     "1:1": "1024x1024",
-    "3:2": "1536x1024",
     "2:3": "1024x1536",
-    "16:9": "1024x576",
+    "3:2": "1536x1024",
+    "3:4": "1024x1360",
+    "4:3": "1360x1024",
+    "4:5": "1024x1280",
+    "5:4": "1280x1024",
     "9:16": "576x1024",
+    "16:9": "1024x576",
+    "9:21": "768x1792",
+    "21:9": "1792x768",
   },
   "2K": {
     "1:1": "2048x2048",
-    "3:2": "2048x1360",
     "2:3": "1360x2048",
-    "16:9": "2048x1152",
+    "3:2": "2048x1360",
+    "3:4": "1536x2048",
+    "4:3": "2048x1536",
+    "4:5": "1600x2000",
+    "5:4": "2000x1600",
     "9:16": "1152x2048",
+    "16:9": "2048x1152",
+    "9:21": "864x2016",
+    "21:9": "2016x864",
   },
   "4K": {
     "1:1": "2160x2160",
-    "3:2": "3232x2160",
     "2:3": "2160x3232",
-    "16:9": "3840x2160",
+    "3:2": "3232x2160",
+    "3:4": "2160x2880",
+    "4:3": "2880x2160",
+    "4:5": "1728x2160",
+    "5:4": "2160x1728",
     "9:16": "2160x3840",
+    "16:9": "3840x2160",
+    "9:21": "1648x3840",
+    "21:9": "3840x1648",
   },
 };
 
@@ -97,7 +121,7 @@ const formatOptions = [
   { value: "webp", label: "WebP" },
 ];
 
-const aspectRatioOptions = ["1:1", "3:2", "2:3", "4:3", "3:4", "4:5", "9:16", "16:9", "21:9"].map((value) => ({
+const nanoAspectRatioOptions = ["1:8", "8:1", "1:4", "4:1", "9:16", "16:9", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "1:1", "21:9"].map((value) => ({
   value,
   label: value,
 }));
@@ -567,7 +591,7 @@ function App() {
             </>
           ) : (
             <div className="twoCols">
-              <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={aspectRatioOptions} />
+              <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />
               <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
             </div>
           )}
@@ -580,7 +604,7 @@ function App() {
 
         <div className="sideColumn">
           <section className="resultPanel">
-            <PanelTitle icon={Eye} title="作品预览" subtitle={selectedJob ? statusText[selectedJob.status] : "暂无作品"} />
+            <PanelTitle icon={Eye} title="作品预览" />
             <Preview job={selectedJob} onDownload={downloadCurrentImage} />
           </section>
 
@@ -610,7 +634,7 @@ function PanelTitle({ icon: Icon, title, subtitle }) {
       <span><Icon size={19} /></span>
       <div>
         <h2>{title}</h2>
-        <p>{subtitle}</p>
+        {subtitle ? <p>{subtitle}</p> : null}
       </div>
     </div>
   );

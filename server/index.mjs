@@ -512,11 +512,9 @@ function buildGeminiBody(params, imagePart = null) {
     contents: [{ role: "user", parts }],
     generationConfig: {
       responseModalities: ["IMAGE"],
-      responseFormat: {
-        image: {
-          aspectRatio: params.aspectRatio,
-          imageSize: params.resolution,
-        },
+      imageConfig: {
+        aspectRatio: params.aspectRatio,
+        imageSize: params.resolution,
       },
     },
   };

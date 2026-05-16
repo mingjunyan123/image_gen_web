@@ -192,8 +192,12 @@ function App() {
     if (showLoading) setJobsLoading(true);
     try {
       const payload = await api("/image-api/jobs");
-      setJobs(payload.jobs || []);
-      if (!selectedJobId && payload.jobs?.length) setSelectedJobId(payload.jobs[0].id);
+      const nextJobs = payload.jobs || [];
+      setJobs(nextJobs);
+      setSelectedJobId((currentId) => {
+        if (currentId && nextJobs.some((job) => job.id === currentId)) return currentId;
+        return nextJobs[0]?.id || null;
+      });
     } catch (error) {
       setNotice(error.message);
     } finally {

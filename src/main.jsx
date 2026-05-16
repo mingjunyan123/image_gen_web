@@ -653,43 +653,20 @@ function App() {
       <section className="dashboardGrid">
         <form className="controlPanel" onSubmit={submitJob}>
           <Segmented
-            value={mediaType}
-            onChange={switchMediaType}
+            value={mode}
+            onChange={switchMode}
             options={[
-              { value: MEDIA_TYPES.IMAGE, label: "图片", icon: ImageIcon },
-              { value: MEDIA_TYPES.VIDEO, label: "视频", icon: Video },
+              { value: "generate", label: "文生图", icon: Sparkles },
+              { value: "edit", label: "图生图", icon: PencilLine },
             ]}
           />
 
-          {mediaType === MEDIA_TYPES.IMAGE ? (
-            <Segmented
-              value={mode}
-              onChange={switchMode}
-              options={[
-                { value: "generate", label: "文生图", icon: Sparkles },
-                { value: "edit", label: "图生图", icon: PencilLine },
-              ]}
-            />
-          ) : (
-            <Segmented
-              value={videoMode}
-              onChange={(nextMode) => {
-                setVideoMode(nextMode);
-                if (nextMode === VIDEO_MODES.TEXT) clearVideoFrames();
-              }}
-              options={[
-                { value: VIDEO_MODES.TEXT, label: "文生视频", icon: Sparkles },
-                { value: VIDEO_MODES.FIRST_FRAME, label: "图生视频", icon: ImageIcon },
-              ]}
-            />
-          )}
-
           <label className="fieldBlock">
-            <span>{mediaType === MEDIA_TYPES.VIDEO ? "视频描述" : "画面描述"}</span>
+            <span>画面描述</span>
             <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} />
           </label>
 
-          {mediaType === MEDIA_TYPES.IMAGE && mode === "edit" ? (
+          {mode === "edit" ? (
             <div className="uploadBox">
               <label>
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => updateSourceImage(event.target.files?.[0])} />
@@ -699,99 +676,77 @@ function App() {
             </div>
           ) : null}
 
-          {mediaType === MEDIA_TYPES.VIDEO && videoMode !== VIDEO_MODES.TEXT ? (
-            <div className="videoFrameGrid">
-              <FrameUpload
-                label="首帧图片"
-                preview={firstFramePreview}
-                onChange={(file) => updateVideoFrame("first", file)}
-                onClear={clearFirstFrame}
-              />
-            </div>
-          ) : null}
+          <div className="modelGrid">
+            {modelOptions.map((model) => (
+              <button
+                key={model.value}
+                type="button"
+                className={modelKey === model.value ? "modelChoice active" : "modelChoice"}
+                onClick={() => setModelKey(model.value)}
+              >
+                <strong>{model.name}</strong>
+              </button>
+            ))}
+          </div>
 
-          {mediaType === MEDIA_TYPES.IMAGE ? (
+          {modelKey === MODEL_KEYS.GPT ? (
             <>
-              <div className="modelGrid">
-                {modelOptions.map((model) => (
-                  <button
-                    key={model.value}
-                    type="button"
-                    className={modelKey === model.value ? "modelChoice active" : "modelChoice"}
-                    onClick={() => setModelKey(model.value)}
-                  >
-                    <strong>{model.name}</strong>
-                  </button>
-                ))}
-              </div>
-
-              {modelKey === MODEL_KEYS.GPT ? (
-                <>
-                  <Segmented
-                    value={gptResolutionMode}
-                    onChange={setGptResolutionMode}
-                    options={[
-                      { value: GPT_RESOLUTION_MODES.PRESET, label: "预设分辨率" },
-                      { value: GPT_RESOLUTION_MODES.CUSTOM, label: "自定义分辨率" },
-                    ]}
-                  />
-                  {gptResolutionMode === GPT_RESOLUTION_MODES.PRESET ? (
-                    <div className="twoCols">
-                      <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
-                      <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
-                    </div>
-                  ) : (
-                    <div className="customSizeBlock">
-                      <div className="dimensionRow">
-                        <label className="fieldBlock">
-                          <span>宽</span>
-                          <input value={gptCustomWidth} inputMode="numeric" onChange={(event) => setGptCustomWidth(event.target.value)} />
-                        </label>
-                        <span className="dimensionDivider">X</span>
-                        <label className="fieldBlock">
-                          <span>高</span>
-                          <input value={gptCustomHeight} inputMode="numeric" onChange={(event) => setGptCustomHeight(event.target.value)} />
-                        </label>
-                      </div>
-                      {sourceImageSize ? (
-                        <p className="helperText">已读取上传图片：{sourceImageSize.width} x {sourceImageSize.height}</p>
-                      ) : null}
-                      {gptSizeError ? <p className="fieldError">{gptSizeError}</p> : null}
-                    </div>
-                  )}
-                  <div className="sizePreview">
-                    图片分辨率：<strong>{readableGptSize}</strong>
-                  </div>
-                  {showGptExperimentalWarning ? <div className="warningBox">{GPT_EXPERIMENTAL_MESSAGE}</div> : null}
-                  <div className="twoCols">
-                    <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
-                    <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
-                  </div>
-                  {outputFormat !== "png" ? (
-                    <label className="rangeBlock">
-                      <span>压缩程度</span>
-                      <input type="range" min="0" max="100" value={outputCompression} onChange={(event) => setOutputCompression(Number(event.target.value))} />
-                      <b>{outputCompression}%</b>
-                    </label>
-                  ) : null}
-                </>
-              ) : (
+              <Segmented
+                value={gptResolutionMode}
+                onChange={setGptResolutionMode}
+                options={[
+                  { value: GPT_RESOLUTION_MODES.PRESET, label: "预设分辨率" },
+                  { value: GPT_RESOLUTION_MODES.CUSTOM, label: "自定义分辨率" },
+                ]}
+              />
+              {gptResolutionMode === GPT_RESOLUTION_MODES.PRESET ? (
                 <div className="twoCols">
-                  <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />
-                  <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
+                  <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
+                  <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
+                </div>
+              ) : (
+                <div className="customSizeBlock">
+                  <div className="dimensionRow">
+                    <label className="fieldBlock">
+                      <span>宽</span>
+                      <input value={gptCustomWidth} inputMode="numeric" onChange={(event) => setGptCustomWidth(event.target.value)} />
+                    </label>
+                    <span className="dimensionDivider">X</span>
+                    <label className="fieldBlock">
+                      <span>高</span>
+                      <input value={gptCustomHeight} inputMode="numeric" onChange={(event) => setGptCustomHeight(event.target.value)} />
+                    </label>
+                  </div>
+                  {sourceImageSize ? (
+                    <p className="helperText">已读取上传图片：{sourceImageSize.width} x {sourceImageSize.height}</p>
+                  ) : null}
+                  {gptSizeError ? <p className="fieldError">{gptSizeError}</p> : null}
                 </div>
               )}
+              <div className="sizePreview">
+                图片分辨率：<strong>{readableGptSize}</strong>
+              </div>
+              {showGptExperimentalWarning ? <div className="warningBox">{GPT_EXPERIMENTAL_MESSAGE}</div> : null}
+              <div className="twoCols">
+                <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
+                <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
+              </div>
+              {outputFormat !== "png" ? (
+                <label className="rangeBlock">
+                  <span>压缩程度</span>
+                  <input type="range" min="0" max="100" value={outputCompression} onChange={(event) => setOutputCompression(Number(event.target.value))} />
+                  <b>{outputCompression}%</b>
+                </label>
+              ) : null}
             </>
           ) : (
-            <>
-              <SelectField label="model" value={videoModel} onChange={setVideoModel} options={sora2VideoModelOptions.map((model) => ({
-                value: model.value,
-                label: model.label,
-              }))} />
-            </>
+            <div className="twoCols">
+              <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />
+              <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
+            </div>
           )}
 
-          <button className="primaryBtn submitBtn" disabled={submitting || (mediaType === MEDIA_TYPES.IMAGE && Boolean(gptSizeError))}>
+          <button className="primaryBtn submitBtn" disabled={submitting || Boolean(gptSizeError)}>
             {submitting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
             {submitting ? "正在提交" : "开始生成"}
           </button>

@@ -317,6 +317,48 @@ function safeOutputFormat(value) {
   return ["png", "jpeg", "webp"].includes(value) ? value : "png";
 }
 
+const GPT_MAX_LONG_SIDE = 3840;
+const GPT_MAX_SHORT_SIDE = 2160;
+
+function validateGptDimensions(widthInput, heightInput) {
+  const widthText = String(widthInput ?? "").trim();
+  const heightText = String(heightInput ?? "").trim();
+  if (!widthText || !heightText) {
+    return { valid: false, error: "宽高必须填写完整" };
+  }
+  if (!/^\d+$/.test(widthText) || !/^\d+$/.test(heightText)) {
+    return { valid: false, error: "宽高必须是正整数" };
+  }
+
+  const width = Number(widthText);
+  const height = Number(heightText);
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+    return { valid: false, error: "宽高必须是正整数" };
+  }
+  if (width % 16 !== 0 || height % 16 !== 0) {
+    return { valid: false, error: "宽高必须能被 16 整除" };
+  }
+
+  const ratio = width / height;
+  if (ratio < 1 / 3 || ratio > 3) {
+    return { valid: false, error: "宽高比必须在 1:3 到 3:1 之间" };
+  }
+
+  const longSide = Math.max(width, height);
+  const shortSide = Math.min(width, height);
+  if (longSide > GPT_MAX_LONG_SIDE || shortSide > GPT_MAX_SHORT_SIDE) {
+    return { valid: false, error: "最大支持 3840x2160，竖图方向为 2160x3840" };
+  }
+
+  return { valid: true, size: `${width}x${height}` };
+}
+
+function validateGptSizeString(size) {
+  const match = /^(\d+)x(\d+)$/i.exec(String(size || "").trim());
+  if (!match) return { valid: false, error: "宽高必须填写完整" };
+  return validateGptDimensions(match[1], match[2]);
+}
+
 function normalizeJobParams(input) {
   const mode = input.mode === "edit" ? "edit" : "generate";
   const modelKey = input.modelKey === "nano" ? "nano" : "gpt";
@@ -329,11 +371,14 @@ function normalizeJobParams(input) {
   const outputCompression = Number.isFinite(outputCompressionValue)
     ? Math.min(100, Math.max(0, outputCompressionValue))
     : 82;
+  const requestedSize = String(input.size || "1024x1024");
+  const gptSizeValidation = modelKey === "gpt" ? validateGptSizeString(requestedSize) : { valid: true, size: requestedSize };
+  if (!gptSizeValidation.valid) throw httpError(400, gptSizeValidation.error);
   const params = {
     mode,
     modelKey,
     prompt,
-    size: String(input.size || "1024x1024"),
+    size: gptSizeValidation.size,
     quality: ["auto", "low", "medium", "high"].includes(input.quality) ? input.quality : "auto",
     outputFormat,
     outputCompression,

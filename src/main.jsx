@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertCircle,
@@ -24,6 +24,16 @@ const MODEL_KEYS = {
   GPT: "gpt",
   NANO: "nano",
 };
+
+const GPT_RESOLUTION_MODES = {
+  PRESET: "preset",
+  CUSTOM: "custom",
+};
+
+const GPT_MAX_LONG_SIDE = 3840;
+const GPT_MAX_SHORT_SIDE = 2160;
+const GPT_STABLE_PIXEL_LIMIT = 2560 * 1440;
+const GPT_EXPERIMENTAL_MESSAGE = "该分辨率高于 OpenAI 标准稳定区间，官方标记为 experimental，可能生成失败。如遇失败，可以降低分辨率或改用 Nano Banana 2。";
 
 const modelOptions = [
   {
@@ -60,15 +70,15 @@ const gptSizeMap = {
   },
   "2K": {
     "1:1": "2048x2048",
-    "3:2": "2048x1365",
-    "2:3": "1365x2048",
+    "3:2": "2048x1360",
+    "2:3": "1360x2048",
     "16:9": "2048x1152",
     "9:16": "1152x2048",
   },
   "4K": {
-    "1:1": "3840x3840",
-    "3:2": "3840x2560",
-    "2:3": "2560x3840",
+    "1:1": "2160x2160",
+    "3:2": "3232x2160",
+    "2:3": "2160x3232",
     "16:9": "3840x2160",
     "9:16": "2160x3840",
   },
@@ -111,6 +121,60 @@ const statusIcon = {
   failed: AlertCircle,
 };
 
+function validateGptDimensions(widthInput, heightInput) {
+  const widthText = String(widthInput ?? "").trim();
+  const heightText = String(heightInput ?? "").trim();
+  if (!widthText || !heightText) {
+    return { valid: false, error: "宽高必须填写完整" };
+  }
+  if (!/^\d+$/.test(widthText) || !/^\d+$/.test(heightText)) {
+    return { valid: false, error: "宽高必须是正整数" };
+  }
+
+  const width = Number(widthText);
+  const height = Number(heightText);
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+    return { valid: false, error: "宽高必须是正整数" };
+  }
+  if (width % 16 !== 0 || height % 16 !== 0) {
+    return { valid: false, error: "宽高必须能被 16 整除" };
+  }
+
+  const ratio = width / height;
+  if (ratio < 1 / 3 || ratio > 3) {
+    return { valid: false, error: "宽高比必须在 1:3 到 3:1 之间" };
+  }
+
+  const longSide = Math.max(width, height);
+  const shortSide = Math.min(width, height);
+  if (longSide > GPT_MAX_LONG_SIDE || shortSide > GPT_MAX_SHORT_SIDE) {
+    return { valid: false, error: "最大支持 3840x2160，竖图方向为 2160x3840" };
+  }
+
+  return {
+    valid: true,
+    width,
+    height,
+    size: `${width}x${height}`,
+    isExperimental: width * height > GPT_STABLE_PIXEL_LIMIT,
+  };
+}
+
+function validateGptSizeString(size) {
+  const match = /^(\d+)x(\d+)$/i.exec(String(size || "").trim());
+  if (!match) return { valid: false, error: "宽高必须填写完整" };
+  return validateGptDimensions(match[1], match[2]);
+}
+
+function readImageDimensions(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
 function App() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
@@ -126,8 +190,11 @@ function App() {
   const [mode, setMode] = useState("generate");
   const [modelKey, setModelKey] = useState(MODEL_KEYS.GPT);
   const [prompt, setPrompt] = useState("");
+  const [gptResolutionMode, setGptResolutionMode] = useState(GPT_RESOLUTION_MODES.PRESET);
   const [gptAspectRatio, setGptAspectRatio] = useState("1:1");
   const [gptResolution, setGptResolution] = useState("1K");
+  const [gptCustomWidth, setGptCustomWidth] = useState("1024");
+  const [gptCustomHeight, setGptCustomHeight] = useState("1024");
   const [quality, setQuality] = useState("auto");
   const [outputFormat, setOutputFormat] = useState("png");
   const [outputCompression, setOutputCompression] = useState(82);
@@ -135,14 +202,22 @@ function App() {
   const [resolution, setResolution] = useState("1K");
   const [sourceImage, setSourceImage] = useState(null);
   const [sourcePreview, setSourcePreview] = useState("");
+  const [sourceImageSize, setSourceImageSize] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const sourcePreviewId = useRef(0);
 
   const selectedJob = useMemo(() => (
     jobs.find((job) => job.id === selectedJobId) || jobs[0] || null
   ), [jobs, selectedJobId]);
   const activeJob = jobs.find((job) => job.status === "processing" || job.status === "queued");
-  const resolvedGptSize = gptSizeMap[gptResolution]?.[gptAspectRatio] || "1024x1024";
+  const presetGptSize = gptSizeMap[gptResolution]?.[gptAspectRatio] || "1024x1024";
+  const presetGptValidation = validateGptSizeString(presetGptSize);
+  const customGptValidation = validateGptDimensions(gptCustomWidth, gptCustomHeight);
+  const activeGptValidation = gptResolutionMode === GPT_RESOLUTION_MODES.CUSTOM ? customGptValidation : presetGptValidation;
+  const resolvedGptSize = activeGptValidation.valid ? activeGptValidation.size : presetGptSize;
   const readableGptSize = resolvedGptSize.replace("x", " * ");
+  const gptSizeError = modelKey === MODEL_KEYS.GPT && !activeGptValidation.valid ? activeGptValidation.error : "";
+  const showGptExperimentalWarning = modelKey === MODEL_KEYS.GPT && activeGptValidation.valid && activeGptValidation.isExperimental;
 
   useEffect(() => {
     checkSession();
@@ -247,14 +322,31 @@ function App() {
       setNotice("图片不能超过 50MB。");
       return;
     }
+    const nextPreview = URL.createObjectURL(file);
+    const previewId = sourcePreviewId.current + 1;
+    sourcePreviewId.current = previewId;
     setSourceImage(file);
-    setSourcePreview(URL.createObjectURL(file));
+    setSourcePreview(nextPreview);
+    readImageDimensions(nextPreview)
+      .then(({ width, height }) => {
+        if (sourcePreviewId.current !== previewId) return;
+        setSourceImageSize({ width, height });
+        setGptCustomWidth(String(width));
+        setGptCustomHeight(String(height));
+      })
+      .catch(() => {
+        if (sourcePreviewId.current !== previewId) return;
+        setSourceImageSize(null);
+        setNotice("图片已上传，但无法读取原始分辨率，请手动填写自定义分辨率。");
+      });
   }
 
   function clearSourceImage() {
+    sourcePreviewId.current += 1;
     if (sourcePreview) URL.revokeObjectURL(sourcePreview);
     setSourceImage(null);
     setSourcePreview("");
+    setSourceImageSize(null);
   }
 
   async function submitJob(event) {
@@ -268,19 +360,28 @@ function App() {
       setNotice("请先上传一张参考图片。");
       return;
     }
+    if (modelKey === MODEL_KEYS.GPT && !activeGptValidation.valid) {
+      setNotice(activeGptValidation.error);
+      return;
+    }
 
     setSubmitting(true);
     setNotice("");
     try {
-      const fields = {
+      const fields = modelKey === MODEL_KEYS.GPT ? {
         mode,
         modelKey,
         prompt: cleanPrompt,
-        size: modelKey === MODEL_KEYS.GPT ? resolvedGptSize : "auto",
+        size: resolvedGptSize,
+        resolutionMode: gptResolutionMode,
         quality,
         outputFormat,
         outputCompression,
         moderation: "auto",
+      } : {
+        mode,
+        modelKey,
+        prompt: cleanPrompt,
         aspectRatio,
         resolution,
       };
@@ -416,13 +517,42 @@ function App() {
 
           {modelKey === MODEL_KEYS.GPT ? (
             <>
-              <div className="twoCols">
-                <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
-                <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
-              </div>
+              <Segmented
+                value={gptResolutionMode}
+                onChange={setGptResolutionMode}
+                options={[
+                  { value: GPT_RESOLUTION_MODES.PRESET, label: "预设分辨率" },
+                  { value: GPT_RESOLUTION_MODES.CUSTOM, label: "自定义分辨率" },
+                ]}
+              />
+              {gptResolutionMode === GPT_RESOLUTION_MODES.PRESET ? (
+                <div className="twoCols">
+                  <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
+                  <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
+                </div>
+              ) : (
+                <div className="customSizeBlock">
+                  <div className="dimensionRow">
+                    <label className="fieldBlock">
+                      <span>宽</span>
+                      <input value={gptCustomWidth} inputMode="numeric" onChange={(event) => setGptCustomWidth(event.target.value)} />
+                    </label>
+                    <span className="dimensionDivider">X</span>
+                    <label className="fieldBlock">
+                      <span>高</span>
+                      <input value={gptCustomHeight} inputMode="numeric" onChange={(event) => setGptCustomHeight(event.target.value)} />
+                    </label>
+                  </div>
+                  {sourceImageSize ? (
+                    <p className="helperText">已读取上传图片：{sourceImageSize.width} x {sourceImageSize.height}</p>
+                  ) : null}
+                  {gptSizeError ? <p className="fieldError">{gptSizeError}</p> : null}
+                </div>
+              )}
               <div className="sizePreview">
                 原始分辨率：<strong>{readableGptSize}</strong>
               </div>
+              {showGptExperimentalWarning ? <div className="warningBox">{GPT_EXPERIMENTAL_MESSAGE}</div> : null}
               <div className="twoCols">
                 <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
                 <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
@@ -442,7 +572,7 @@ function App() {
             </div>
           )}
 
-          <button className="primaryBtn submitBtn" disabled={submitting}>
+          <button className="primaryBtn submitBtn" disabled={submitting || Boolean(gptSizeError)}>
             {submitting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
             {submitting ? "正在提交" : "开始生成"}
           </button>
@@ -491,7 +621,7 @@ function Segmented({ value, onChange, options }) {
     <div className="segmented">
       {options.map(({ value: optionValue, label, icon: Icon }) => (
         <button key={optionValue} type="button" className={value === optionValue ? "active" : ""} onClick={() => onChange(optionValue)}>
-          <Icon size={17} />
+          {Icon ? <Icon size={17} /> : null}
           {label}
         </button>
       ))}

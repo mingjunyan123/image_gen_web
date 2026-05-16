@@ -419,6 +419,50 @@ textarea:focus {
   color: #143f36;
 }
 
+.customSizeBlock {
+  display: grid;
+  gap: 8px;
+}
+
+.dimensionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+}
+
+.dimensionDivider {
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  color: #53665d;
+  font-weight: 900;
+}
+
+.helperText,
+.fieldError {
+  margin: 0;
+  line-height: 1.5;
+  font-size: 13px;
+}
+
+.helperText {
+  color: #66756e;
+}
+
+.fieldError {
+  color: #9f2d20;
+}
+
+.warningBox {
+  color: #6e4b00;
+  background: #fff7df;
+  border: 1px solid #efd37b;
+  border-radius: 8px;
+  padding: 11px 12px;
+  line-height: 1.5;
+}
+
 .optionSet {
   margin: 0;
   padding: 0;

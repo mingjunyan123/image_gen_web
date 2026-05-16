@@ -1011,11 +1011,49 @@ async function callJimengVideoModel(job) {
 }
 
 function parseJimengVideoResponse(payload) {
-  const first = payload?.data?.[0] || payload?.videos?.[0] || payload;
+  const first = Array.isArray(payload?.data)
+    ? payload.data[0]
+    : payload?.data || payload?.videos?.[0] || payload;
   return {
-    url: first?.url || first?.video_url || first?.videoUrl || first?.content?.video_url || null,
-    b64: first?.b64_json || first?.b64Json || null,
+    url: first?.url || first?.video_url || first?.videoUrl || first?.video?.url || first?.content?.video_url || findNestedVideoUrl(first),
+    b64: first?.b64_json || first?.b64Json || findNestedBase64(first),
   };
+}
+
+function findNestedVideoUrl(value, depth = 0) {
+  if (!value || depth > 5) return null;
+  if (typeof value === "string") {
+    return /^https?:\/\/.+\.(mp4|mov|webm)(\?|$)/i.test(value) ? value : null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findNestedVideoUrl(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return null;
+  for (const key of ["main_url", "backup_url", "download_url", "play_url", "video_url", "url"]) {
+    const found = findNestedVideoUrl(value[key], depth + 1);
+    if (found) return found;
+  }
+  for (const item of Object.values(value)) {
+    const found = findNestedVideoUrl(item, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findNestedBase64(value, depth = 0) {
+  if (!value || depth > 5 || typeof value !== "object") return null;
+  for (const key of ["b64_json", "b64Json", "base64", "video_base64"]) {
+    if (typeof value[key] === "string" && value[key].length > 1000) return value[key];
+  }
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findNestedBase64(item, depth + 1);
+    if (found) return found;
+  }
+  return null;
 }
 
 function readUpstreamError(payload, response) {

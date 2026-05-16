@@ -841,10 +841,27 @@ function readUsageSummary(payload) {
 function summarizeMissingMediaPayload(payload) {
   if (!payload || typeof payload !== "object") return { payloadType: payload === null ? "null" : typeof payload };
   return {
+    code: payload.code ?? null,
+    message: payload.message ?? null,
     topLevelKeys: Object.keys(payload).slice(0, 20),
+    dataSummary: summarizePayloadData(payload.data),
     usage: readUsageSummary(payload),
     text: readPayloadText(payload),
     finishReason: payload?.candidates?.[0]?.finishReason || payload?.choices?.[0]?.finish_reason || null,
+  };
+}
+
+function summarizePayloadData(data) {
+  if (data === null || data === undefined) return data;
+  if (Array.isArray(data)) return { type: "array", length: data.length, firstKeys: Object.keys(data[0] || {}).slice(0, 20) };
+  if (typeof data !== "object") return { type: typeof data, preview: compactLogText(data, 160) };
+  const innerData = data.data;
+  return {
+    type: "object",
+    keys: Object.keys(data).slice(0, 20),
+    innerData: Array.isArray(innerData)
+      ? { type: "array", length: innerData.length, firstKeys: Object.keys(innerData[0] || {}).slice(0, 20) }
+      : undefined,
   };
 }
 
@@ -994,8 +1011,9 @@ async function callJimengVideoModel(job) {
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(readUpstreamError(payload, response));
+  const unwrappedPayload = unwrapJimengPayload(payload);
 
-  const video = parseJimengVideoResponse(payload);
+  const video = parseJimengVideoResponse(unwrappedPayload);
   if (video.b64) {
     return { buffer: Buffer.from(video.b64, "base64"), mime: "video/mp4" };
   }
@@ -1008,6 +1026,18 @@ async function callJimengVideoModel(job) {
     };
   }
   throw missingMediaError("video", payload, "jimeng");
+}
+
+function unwrapJimengPayload(payload) {
+  if (!payload || typeof payload !== "object") return payload;
+  if (Object.prototype.hasOwnProperty.call(payload, "code")) {
+    const code = Number(payload.code);
+    if (Number.isFinite(code) && code !== 0) {
+      throw new Error(payload.message || `Jimeng API 返回错误 code=${payload.code}`);
+    }
+    return payload.data ?? payload;
+  }
+  return payload;
 }
 
 function parseJimengVideoResponse(payload) {

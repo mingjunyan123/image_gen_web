@@ -49,14 +49,16 @@ services:
     networks:
       - ai-gateway
 
-  jimeng-api:
-    image: ghcr.io/iptag/jimeng-api:latest
-    container_name: jimeng-api
+  sora2api:
+    image: thesmallhancat/sora2api:latest
+    container_name: sora2api
     restart: always
     environment:
       TZ: Asia/Singapore
     expose:
-      - "5100"
+      - "8000"
+    volumes:
+      - ./sora2api-data:/app/data
     networks:
       - ai-gateway
 
@@ -68,7 +70,7 @@ services:
       - new-api
       - cliproxyapi
       - image-service
-      - jimeng-api
+      - sora2api
     ports:
       - "80:80"
       - "443:443"

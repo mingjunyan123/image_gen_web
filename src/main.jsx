@@ -34,7 +34,6 @@ const MEDIA_TYPES = {
 const VIDEO_MODES = {
   TEXT: "text",
   FIRST_FRAME: "first-frame",
-  FIRST_LAST_FRAME: "first-last-frame",
 };
 
 const LOCAL_PREVIEW = import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
@@ -145,46 +144,17 @@ const resolutionOptions = ["512", "1K", "2K", "4K"].map((value) => ({
   label: value,
 }));
 
-const jimengVideoRatioOptions = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].map((value) => ({
-  value,
-  label: value,
-}));
-
-const jimengVideoResolutionOptions = ["720p", "1080p"].map((value) => ({
-  value,
-  label: value,
-}));
-
-const jimengVideoModelOptions = [
-  "jimeng-video-veo3",
-  "jimeng-video-veo3.1",
-  "jimeng-video-sora2",
+const sora2VideoModelOptions = [
+  { value: "sora2-landscape-10s", label: "横屏 10 秒" },
+  { value: "sora2-landscape-15s", label: "横屏 15 秒" },
+  { value: "sora2-landscape-25s", label: "横屏 25 秒" },
+  { value: "sora2-portrait-10s", label: "竖屏 10 秒" },
+  { value: "sora2-portrait-15s", label: "竖屏 15 秒" },
+  { value: "sora2-portrait-25s", label: "竖屏 25 秒" },
 ].map((value) => ({
-  value,
-  label: displayJimengVideoModel(value),
+  value: value.value,
+  label: value.label,
 }));
-
-function displayJimengVideoModel(value) {
-  const suffix = value.replace(/^jimeng-video-/, "");
-  if (/^\d/.test(suffix)) return value;
-  return suffix;
-}
-
-function jimengVideoDurationOptions(model) {
-  if (model === "jimeng-video-veo3" || model === "jimeng-video-veo3.1") return [{ value: "8", label: "8 秒" }];
-  if (model === "jimeng-video-sora2") return ["4", "8", "12"].map((value) => ({ value, label: `${value} 秒` }));
-  if (model === "jimeng-video-seedance-2.0" || model === "jimeng-video-seedance-2.0-fast") {
-    return Array.from({ length: 12 }, (_, index) => String(index + 4)).map((value) => ({ value, label: `${value} 秒` }));
-  }
-  if (model === "jimeng-video-3.5-pro") return ["5", "10", "12"].map((value) => ({ value, label: `${value} 秒` }));
-  return ["5", "10"].map((value) => ({ value, label: `${value} 秒` }));
-}
-
-function defaultJimengDuration(model) {
-  if (model === "jimeng-video-veo3" || model === "jimeng-video-veo3.1") return "8";
-  if (model === "jimeng-video-sora2") return "4";
-  return "5";
-}
 
 const statusText = {
   queued: "正在等待",
@@ -260,7 +230,7 @@ function makePreviewJob({ mediaType, mode, modelKey, prompt, params }) {
     id: `preview-${timestamp}`,
     status: "queued",
     mediaType,
-    provider: mediaType === MEDIA_TYPES.VIDEO ? "jimeng" : modelKey === MODEL_KEYS.NANO ? "gemini" : "openai",
+    provider: mediaType === MEDIA_TYPES.VIDEO ? "sora2" : modelKey === MODEL_KEYS.NANO ? "gemini" : "openai",
     mode,
     modelKey,
     prompt,
@@ -304,14 +274,9 @@ function App() {
   const [sourcePreview, setSourcePreview] = useState("");
   const [sourceImageSize, setSourceImageSize] = useState(null);
   const [videoMode, setVideoMode] = useState(VIDEO_MODES.TEXT);
-  const [videoModel, setVideoModel] = useState("jimeng-video-sora2");
-  const [videoRatio, setVideoRatio] = useState("16:9");
-  const [videoResolution, setVideoResolution] = useState("720p");
-  const [videoDuration, setVideoDuration] = useState("5");
+  const [videoModel, setVideoModel] = useState("sora2-landscape-10s");
   const [firstFrame, setFirstFrame] = useState(null);
   const [firstFramePreview, setFirstFramePreview] = useState("");
-  const [endFrame, setEndFrame] = useState(null);
-  const [endFramePreview, setEndFramePreview] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const sourcePreviewId = useRef(0);
 
@@ -327,21 +292,11 @@ function App() {
   const readableGptSize = resolvedGptSize.replace("x", " * ");
   const gptSizeError = modelKey === MODEL_KEYS.GPT && !activeGptValidation.valid ? activeGptValidation.error : "";
   const showGptExperimentalWarning = modelKey === MODEL_KEYS.GPT && activeGptValidation.valid && activeGptValidation.isExperimental;
-  const activeVideoDurationOptions = useMemo(() => jimengVideoDurationOptions(videoModel), [videoModel]);
-  const showVideoRatio = videoMode === VIDEO_MODES.TEXT;
-  const showVideoResolution = ["jimeng-video-3.0", "jimeng-video-3.0-fast"].includes(videoModel);
-  const fixedVideoDuration = activeVideoDurationOptions.length === 1;
 
   useEffect(() => {
     if (LOCAL_PREVIEW) return;
     checkSession();
   }, []);
-
-  useEffect(() => {
-    if (!activeVideoDurationOptions.some((option) => option.value === videoDuration)) {
-      setVideoDuration(defaultJimengDuration(videoModel));
-    }
-  }, [activeVideoDurationOptions, videoDuration, videoModel]);
 
   useEffect(() => {
     if (LOCAL_PREVIEW) return undefined;
@@ -358,10 +313,6 @@ function App() {
   useEffect(() => () => {
     if (firstFramePreview) URL.revokeObjectURL(firstFramePreview);
   }, [firstFramePreview]);
-
-  useEffect(() => () => {
-    if (endFramePreview) URL.revokeObjectURL(endFramePreview);
-  }, [endFramePreview]);
 
   async function api(path, options = {}) {
     const response = await fetch(path, {
@@ -498,7 +449,6 @@ function App() {
 
   function updateVideoFrame(kind, file) {
     if (kind === "first") clearFirstFrame();
-    if (kind === "end") clearEndFrame();
     if (!file) return;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
       setNotice("请上传 PNG、JPG 或 WebP 图片。");
@@ -512,9 +462,6 @@ function App() {
     if (kind === "first") {
       setFirstFrame(file);
       setFirstFramePreview(preview);
-    } else {
-      setEndFrame(file);
-      setEndFramePreview(preview);
     }
   }
 
@@ -524,15 +471,8 @@ function App() {
     setFirstFramePreview("");
   }
 
-  function clearEndFrame() {
-    if (endFramePreview) URL.revokeObjectURL(endFramePreview);
-    setEndFrame(null);
-    setEndFramePreview("");
-  }
-
   function clearVideoFrames() {
     clearFirstFrame();
-    clearEndFrame();
   }
 
   async function submitJob(event) {
@@ -550,10 +490,6 @@ function App() {
       setNotice("请先上传首帧图片。");
       return;
     }
-    if (mediaType === MEDIA_TYPES.VIDEO && videoMode === VIDEO_MODES.FIRST_LAST_FRAME && !endFrame) {
-      setNotice("请先上传尾帧图片。");
-      return;
-    }
     if (mediaType === MEDIA_TYPES.IMAGE && modelKey === MODEL_KEYS.GPT && !activeGptValidation.valid) {
       setNotice(activeGptValidation.error);
       return;
@@ -567,16 +503,11 @@ function App() {
       if (mediaType === MEDIA_TYPES.VIDEO) {
         const fields = {
           mediaType: MEDIA_TYPES.VIDEO,
-          provider: "jimeng",
+          provider: "sora2",
           videoMode,
-          jimengModel: videoModel,
+          sora2Model: videoModel,
           prompt: cleanPrompt,
-          duration: videoDuration,
-          functionMode: "first_last_frames",
-          responseFormat: "url",
         };
-        if (showVideoRatio) fields.ratio = videoRatio;
-        if (showVideoResolution) fields.videoResolution = videoResolution;
         previewJob = makePreviewJob({
           mediaType: MEDIA_TYPES.VIDEO,
           mode: videoMode,
@@ -590,7 +521,6 @@ function App() {
           body = new FormData();
           Object.entries(fields).forEach(([key, value]) => body.append(key, value));
           body.append("firstFrame", firstFrame, firstFrame.name);
-          if (videoMode === VIDEO_MODES.FIRST_LAST_FRAME) body.append("endFrame", endFrame, endFrame.name);
         }
       } else {
         const fields = modelKey === MODEL_KEYS.GPT ? {
@@ -746,12 +676,10 @@ function App() {
               onChange={(nextMode) => {
                 setVideoMode(nextMode);
                 if (nextMode === VIDEO_MODES.TEXT) clearVideoFrames();
-                if (nextMode === VIDEO_MODES.FIRST_FRAME) clearEndFrame();
               }}
               options={[
                 { value: VIDEO_MODES.TEXT, label: "文生视频", icon: Sparkles },
-                { value: VIDEO_MODES.FIRST_FRAME, label: "首帧图", icon: ImageIcon },
-                { value: VIDEO_MODES.FIRST_LAST_FRAME, label: "首尾帧", icon: Video },
+                { value: VIDEO_MODES.FIRST_FRAME, label: "图生视频", icon: ImageIcon },
               ]}
             />
           )}
@@ -779,14 +707,6 @@ function App() {
                 onChange={(file) => updateVideoFrame("first", file)}
                 onClear={clearFirstFrame}
               />
-              {videoMode === VIDEO_MODES.FIRST_LAST_FRAME ? (
-                <FrameUpload
-                  label="尾帧图片"
-                  preview={endFramePreview}
-                  onChange={(file) => updateVideoFrame("end", file)}
-                  onClear={clearEndFrame}
-                />
-              ) : null}
             </div>
           ) : null}
 
@@ -864,28 +784,10 @@ function App() {
             </>
           ) : (
             <>
-              <SelectField label="model" value={videoModel} onChange={setVideoModel} options={jimengVideoModelOptions.map((model) => ({
+              <SelectField label="model" value={videoModel} onChange={setVideoModel} options={sora2VideoModelOptions.map((model) => ({
                 value: model.value,
                 label: model.label,
               }))} />
-              <div className="twoCols">
-                {showVideoRatio ? (
-                  <SelectField label="视频比例" value={videoRatio} onChange={setVideoRatio} options={jimengVideoRatioOptions} />
-                ) : (
-                  <div />
-                )}
-                {fixedVideoDuration ? (
-                  <div className="readonlyField">
-                    <span>时长</span>
-                    <strong>{videoDuration} 秒</strong>
-                  </div>
-                ) : (
-                  <SelectField label="时长" value={videoDuration} onChange={setVideoDuration} options={activeVideoDurationOptions} />
-                )}
-              </div>
-              {showVideoResolution ? (
-                <SelectField label="清晰度" value={videoResolution} onChange={setVideoResolution} options={jimengVideoResolutionOptions} />
-              ) : null}
             </>
           )}
 

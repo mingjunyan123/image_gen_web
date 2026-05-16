@@ -17,8 +17,8 @@ const DB_PATH = path.join(DATA_DIR, "app.db");
 const IMAGE_DIR = path.join(DATA_DIR, "images");
 const VIDEO_DIR = path.join(DATA_DIR, "videos");
 const NEW_API_BASE_URL = (process.env.NEW_API_BASE_URL || "http://new-api:3000").replace(/\/+$/, "");
-const JIMENG_API_BASE_URL = (process.env.JIMENG_API_BASE_URL || "http://jimeng-api:5100").replace(/\/+$/, "");
-const JIMENG_SESSION_ID = cleanJimengToken(process.env.JIMENG_SESSION_ID || "");
+const SORA2_API_BASE_URL = (process.env.SORA2_API_BASE_URL || "http://sora2api:8000").replace(/\/+$/, "");
+const SORA2_API_KEY = cleanToken(process.env.SORA2_API_KEY || "han1234");
 const SERVICE_SECRET = process.env.IMAGE_SERVICE_SECRET || "change-me-image-service-secret";
 const TOKEN_PEPPER = process.env.IMAGE_TOKEN_PEPPER || SERVICE_SECRET;
 const SESSION_DAYS = Number(process.env.IMAGE_SESSION_DAYS || 7);
@@ -81,9 +81,6 @@ db.exec(`
     source_image_path TEXT,
     source_image_name TEXT,
     source_image_mime TEXT,
-    source_end_image_path TEXT,
-    source_end_image_name TEXT,
-    source_end_image_mime TEXT,
     result_image_path TEXT,
     result_media_path TEXT,
     result_mime TEXT,
@@ -117,9 +114,6 @@ function ensureColumn(tableName, columnName, definition) {
 
 ensureColumn("jobs", "media_type", "TEXT NOT NULL DEFAULT 'image'");
 ensureColumn("jobs", "provider", "TEXT NOT NULL DEFAULT 'openai'");
-ensureColumn("jobs", "source_end_image_path", "TEXT");
-ensureColumn("jobs", "source_end_image_name", "TEXT");
-ensureColumn("jobs", "source_end_image_mime", "TEXT");
 ensureColumn("jobs", "result_media_path", "TEXT");
 
 db.prepare(`
@@ -168,10 +162,6 @@ function decryptToken(user) {
 
 function cleanToken(value) {
   return String(value || "").trim().replace(/^Bearer\s+/i, "");
-}
-
-function cleanJimengToken(value) {
-  return String(value || "").trim().replace(/^Bearer\s+/i, "").replace(/^sessionid=/i, "");
 }
 
 function parseCookies(req) {
@@ -363,44 +353,18 @@ function safeNanoAspectRatio(value) {
   return NANO_ASPECT_RATIOS.has(value) ? value : "1:1";
 }
 
-const JIMENG_VIDEO_MODES = new Set(["text", "first-frame", "first-last-frame"]);
-const JIMENG_VIDEO_RATIOS = new Set(["1:1", "4:3", "3:4", "16:9", "9:16", "21:9"]);
-const JIMENG_VIDEO_RESOLUTIONS = new Set(["720p", "1080p"]);
-const JIMENG_VIDEO_MODELS = new Set([
-  "jimeng-video-seedance-2.0",
-  "jimeng-video-seedance-2.0-fast",
-  "jimeng-video-3.5-pro",
-  "jimeng-video-veo3",
-  "jimeng-video-veo3.1",
-  "jimeng-video-sora2",
-  "jimeng-video-3.0-pro",
-  "jimeng-video-3.0",
-  "jimeng-video-3.0-fast",
-  "jimeng-video-2.0-pro",
-  "jimeng-video-2.0",
+const SORA2_VIDEO_MODES = new Set(["text", "first-frame"]);
+const SORA2_VIDEO_MODELS = new Set([
+  "sora2-landscape-10s",
+  "sora2-landscape-15s",
+  "sora2-landscape-25s",
+  "sora2-portrait-10s",
+  "sora2-portrait-15s",
+  "sora2-portrait-25s",
 ]);
 
-function safeJimengVideoRatio(value) {
-  return JIMENG_VIDEO_RATIOS.has(value) ? value : "16:9";
-}
-
-function safeJimengVideoResolution(value) {
-  return JIMENG_VIDEO_RESOLUTIONS.has(value) ? value : "720p";
-}
-
-function safeJimengVideoModel(value) {
-  return JIMENG_VIDEO_MODELS.has(value) ? value : "jimeng-video-3.5-pro";
-}
-
-function safeJimengVideoDuration(model, value) {
-  const duration = Number(value);
-  if (model === "jimeng-video-veo3" || model === "jimeng-video-veo3.1") return "8";
-  if (model === "jimeng-video-sora2") return ["4", "8", "12"].includes(String(value)) ? String(value) : "4";
-  if (model === "jimeng-video-seedance-2.0" || model === "jimeng-video-seedance-2.0-fast") {
-    return Number.isInteger(duration) && duration >= 4 && duration <= 15 ? String(duration) : "5";
-  }
-  if (model === "jimeng-video-3.5-pro") return ["5", "10", "12"].includes(String(value)) ? String(value) : "5";
-  return ["5", "10"].includes(String(value)) ? String(value) : "5";
+function safeSora2VideoModel(value) {
+  return SORA2_VIDEO_MODELS.has(value) ? value : "sora2-landscape-10s";
 }
 
 const GPT_MAX_LONG_SIDE = 3840;
@@ -450,24 +414,16 @@ function normalizeJobParams(input) {
   if (mediaType === "video") {
     const prompt = String(input.prompt || "").trim();
     if (!prompt) throw httpError(400, "请先写下想生成的视频内容。");
-    const videoMode = JIMENG_VIDEO_MODES.has(input.videoMode) ? input.videoMode : "text";
-    const jimengModel = safeJimengVideoModel(String(input.jimengModel || "jimeng-video-3.5-pro").trim());
-    const params = {
+    const videoMode = SORA2_VIDEO_MODES.has(input.videoMode) ? input.videoMode : "text";
+    const sora2Model = safeSora2VideoModel(String(input.sora2Model || input.videoModel || "sora2-landscape-10s").trim());
+    return {
       mediaType,
-      provider: "jimeng",
+      provider: "sora2",
       mode: videoMode,
-      modelKey: "jimeng",
-      jimengModel,
+      modelKey: "sora2",
+      sora2Model,
       prompt,
-      duration: safeJimengVideoDuration(jimengModel, input.duration),
-      functionMode: "first_last_frames",
-      responseFormat: "url",
     };
-    if (videoMode === "text") params.ratio = safeJimengVideoRatio(input.ratio);
-    if (jimengModel === "jimeng-video-3.0" || jimengModel === "jimeng-video-3.0-fast") {
-      params.resolution = safeJimengVideoResolution(input.videoResolution);
-    }
-    return params;
   }
 
   const mode = input.mode === "edit" ? "edit" : "generate";
@@ -583,7 +539,6 @@ async function createJob(req, res) {
   const { fields, file, files } = await parseJobRequest(req);
   const params = normalizeJobParams(fields);
   const firstFrame = params.mediaType === "video" ? (files.firstFrame || null) : file;
-  const endFrame = params.mediaType === "video" ? (files.endFrame || null) : null;
 
   if (params.mediaType === "image" && params.mode === "edit" && !firstFrame) {
     throw httpError(400, "请先上传一张参考图片。");
@@ -591,11 +546,8 @@ async function createJob(req, res) {
   if (params.mediaType === "video" && params.mode !== "text" && !firstFrame) {
     throw httpError(400, "请先上传首帧图片。");
   }
-  if (params.mediaType === "video" && params.mode === "first-last-frame" && !endFrame) {
-    throw httpError(400, "请先上传尾帧图片。");
-  }
 
-  for (const upload of [firstFrame, endFrame].filter(Boolean)) {
+  for (const upload of [firstFrame].filter(Boolean)) {
     if (!["image/png", "image/jpeg", "image/webp"].includes(upload.mime)) {
       throw httpError(400, "请上传 PNG、JPG 或 WebP 图片。");
     }
@@ -606,7 +558,6 @@ async function createJob(req, res) {
 
   const jobId = randomId(20);
   let sourcePath = null;
-  let sourceEndPath = null;
   if (firstFrame) {
     const ext = contentTypeToExtension(firstFrame.mime);
     sourcePath = path.join("sources", `${jobId}.${ext}`);
@@ -616,21 +567,15 @@ async function createJob(req, res) {
       await writeImageFile(sourcePath, firstFrame.data);
     }
   }
-  if (endFrame) {
-    const ext = contentTypeToExtension(endFrame.mime);
-    sourceEndPath = path.join("sources", `${jobId}-end.${ext}`);
-    await writeVideoFile(sourceEndPath, endFrame.data);
-  }
 
   const timestamp = now();
   db.prepare(`
     INSERT INTO jobs (
       id, user_id, status, media_type, provider, mode, model_key, params_json,
       source_image_path, source_image_name, source_image_mime,
-      source_end_image_path, source_end_image_name, source_end_image_mime,
       created_at
     )
-    VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     jobId,
     session.id,
@@ -642,9 +587,6 @@ async function createJob(req, res) {
     sourcePath,
     firstFrame?.filename || null,
     firstFrame?.mime || null,
-    sourceEndPath,
-    endFrame?.filename || null,
-    endFrame?.mime || null,
     timestamp,
   );
 
@@ -965,58 +907,45 @@ async function parseOpenAiImageResponse(response, outputFormat, provider) {
   throw missingMediaError("image", payload, provider);
 }
 
-async function callJimengVideoModel(job) {
-  if (!JIMENG_SESSION_ID) {
-    throw new Error("Jimeng sessionid 还没有配置，请先设置 JIMENG_SESSION_ID。");
-  }
+async function callSora2VideoModel(job) {
   const params = JSON.parse(job.params_json);
-  const headers = { Authorization: `Bearer ${JIMENG_SESSION_ID}` };
-  let body;
-
+  const content = [{ type: "text", text: params.prompt }];
   if (job.source_image_path) {
-    body = new FormData();
-    body.append("model", params.jimengModel || "jimeng-video-3.5-pro");
-    body.append("prompt", params.prompt);
-    body.append("duration", String(params.duration || "5"));
-    body.append("functionMode", params.functionMode || "first_last_frames");
-    body.append("response_format", params.responseFormat || "url");
-    if (params.ratio) body.append("ratio", params.ratio);
-    if (params.resolution) body.append("resolution", params.resolution);
-
     const firstFrame = await readFile(safeVideoPath(job.source_image_path));
-    body.append("image_file_1", new Blob([firstFrame], { type: job.source_image_mime }), job.source_image_name || "first-frame.png");
-    if (job.source_end_image_path) {
-      const endFrame = await readFile(safeVideoPath(job.source_end_image_path));
-      body.append("image_file_2", new Blob([endFrame], { type: job.source_end_image_mime }), job.source_end_image_name || "end-frame.png");
-    }
-  } else {
-    headers["Content-Type"] = "application/json";
-    const payload = {
-      model: params.jimengModel || "jimeng-video-3.5-pro",
-      prompt: params.prompt,
-      duration: Number(params.duration || 5),
-      functionMode: params.functionMode || "first_last_frames",
-      response_format: params.responseFormat || "url",
-    };
-    if (params.ratio) payload.ratio = params.ratio;
-    if (params.resolution) payload.resolution = params.resolution;
-    body = JSON.stringify(payload);
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: `data:${job.source_image_mime || "image/png"};base64,${firstFrame.toString("base64")}`,
+      },
+    });
   }
+  const body = {
+    model: params.sora2Model || "sora2-landscape-10s",
+    stream: true,
+    messages: [
+      {
+        role: "user",
+        content,
+      },
+    ],
+  };
 
-  const response = await fetchWithTimeout(`${JIMENG_API_BASE_URL}/v1/videos/generations`, {
+  const response = await fetchWithTimeout(`${SORA2_API_BASE_URL}/v1/chat/completions`, {
     method: "POST",
-    headers,
-    body,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${SORA2_API_KEY}`,
+    },
+    body: JSON.stringify(body),
     timeoutMs: VIDEO_REQUEST_TIMEOUT_MS,
   });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(readUpstreamError(payload, response));
-  const unwrappedPayload = unwrapJimengPayload(payload);
-
-  const video = parseJimengVideoResponse(unwrappedPayload);
-  if (video.b64) {
-    return { buffer: Buffer.from(video.b64, "base64"), mime: "video/mp4" };
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(readUpstreamError(payload, response));
   }
+
+  const text = await readSseText(response);
+  const video = parseSora2VideoResponse(text);
   if (video.url) {
     const videoResponse = await fetchWithTimeout(video.url, { timeoutMs: VIDEO_REQUEST_TIMEOUT_MS });
     if (!videoResponse.ok) throw new Error("视频已经生成，但下载保存失败。");
@@ -1025,29 +954,34 @@ async function callJimengVideoModel(job) {
       mime: videoResponse.headers.get("content-type")?.split(";")[0] || "video/mp4",
     };
   }
-  throw missingMediaError("video", payload, "jimeng");
+  throw missingMediaError("video", { text }, "sora2");
 }
 
-function unwrapJimengPayload(payload) {
-  if (!payload || typeof payload !== "object") return payload;
-  if (Object.prototype.hasOwnProperty.call(payload, "code")) {
-    const code = Number(payload.code);
-    if (Number.isFinite(code) && code !== 0) {
-      throw new Error(payload.message || `Jimeng API 返回错误 code=${payload.code}`);
+async function readSseText(response) {
+  const raw = await response.text();
+  const chunks = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    let payload;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      chunks.push(data);
+      continue;
     }
-    return payload.data ?? payload;
+    const delta = payload?.choices?.[0]?.delta?.content;
+    const message = payload?.choices?.[0]?.message?.content;
+    if (delta) chunks.push(delta);
+    if (message) chunks.push(message);
   }
-  return payload;
+  return chunks.join("");
 }
 
-function parseJimengVideoResponse(payload) {
-  const first = Array.isArray(payload?.data)
-    ? payload.data[0]
-    : payload?.data || payload?.videos?.[0] || payload;
-  return {
-    url: first?.url || first?.video_url || first?.videoUrl || first?.video?.url || first?.content?.video_url || findNestedVideoUrl(first),
-    b64: first?.b64_json || first?.b64Json || findNestedBase64(first),
-  };
+function parseSora2VideoResponse(text) {
+  const url = findNestedVideoUrl(text) || /https?:\/\/\S+/i.exec(text)?.[0]?.replace(/[)"'\],。]+$/, "");
+  return { url: url || null };
 }
 
 function findNestedVideoUrl(value, depth = 0) {
@@ -1069,18 +1003,6 @@ function findNestedVideoUrl(value, depth = 0) {
   }
   for (const item of Object.values(value)) {
     const found = findNestedVideoUrl(item, depth + 1);
-    if (found) return found;
-  }
-  return null;
-}
-
-function findNestedBase64(value, depth = 0) {
-  if (!value || depth > 5 || typeof value !== "object") return null;
-  for (const key of ["b64_json", "b64Json", "base64", "video_base64"]) {
-    if (typeof value[key] === "string" && value[key].length > 1000) return value[key];
-  }
-  for (const item of Array.isArray(value) ? value : Object.values(value)) {
-    const found = findNestedBase64(item, depth + 1);
     if (found) return found;
   }
   return null;
@@ -1135,7 +1057,7 @@ async function workerTick() {
 async function processJob(job) {
   try {
     const media = job.media_type === "video"
-      ? await callJimengVideoModel(job)
+      ? await callSora2VideoModel(job)
       : await callImageModel(job, decryptToken(job));
     const ext = contentTypeToExtension(media.mime, job.media_type === "video" ? "mp4" : "png");
     const slug = `${randomId(24)}.${ext}`;

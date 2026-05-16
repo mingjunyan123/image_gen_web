@@ -16,9 +16,8 @@ services:
       IMAGE_MAX_TOKEN_PROCESSING: "1"
       IMAGE_MAX_TOKEN_QUEUED: "5"
       IMAGE_REQUEST_TIMEOUT_MS: "600000"
-      JIMENG_API_BASE_URL: "http://jimeng-api:5100"
-      JIMENG_SESSION_ID: ""
-      JIMENG_REGION: "cn"
+      SORA2_API_BASE_URL: "http://sora2api:8000"
+      SORA2_API_KEY: "han1234"
       VIDEO_REQUEST_TIMEOUT_MS: "2400000"
     volumes:
       - ./image-service-data:/data/image-service
@@ -26,6 +25,6 @@ services:
       - "3000"
     depends_on:
       - new-api
-      - jimeng-api
+      - sora2api
     networks:
       - ai-gateway

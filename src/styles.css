@@ -442,28 +442,6 @@ textarea:focus {
   font-size: 13px;
 }
 
-.readonlyField {
-  color: #43564d;
-  background: #fbfdfb;
-  border: 1px solid #dce8de;
-  border-radius: 8px;
-  padding: 12px;
-}
-
-.readonlyField {
-  display: grid;
-  gap: 6px;
-}
-
-.readonlyField span {
-  color: #2c3c35;
-  font-weight: 900;
-}
-
-.readonlyField strong {
-  color: #143f36;
-}
-
 .customSizeBlock {
   display: grid;
   gap: 8px;

@@ -324,6 +324,11 @@ function normalizeJobParams(input) {
   if (!prompt) throw httpError(400, "请先写下想生成的内容。");
 
   const outputFormat = safeOutputFormat(input.outputFormat);
+  const outputCompressionInput = input.outputCompression === undefined || input.outputCompression === "" ? 82 : input.outputCompression;
+  const outputCompressionValue = Number(outputCompressionInput);
+  const outputCompression = Number.isFinite(outputCompressionValue)
+    ? Math.min(100, Math.max(0, outputCompressionValue))
+    : 82;
   const params = {
     mode,
     modelKey,
@@ -331,7 +336,7 @@ function normalizeJobParams(input) {
     size: String(input.size || "1024x1024"),
     quality: ["auto", "low", "medium", "high"].includes(input.quality) ? input.quality : "auto",
     outputFormat,
-    outputCompression: Math.min(100, Math.max(1, Number(input.outputCompression || 82))),
+    outputCompression,
     moderation: input.moderation === "low" ? "low" : "auto",
     aspectRatio: String(input.aspectRatio || "1:1"),
     resolution: ["512", "1K", "2K", "4K"].includes(input.resolution) ? input.resolution : "1K",

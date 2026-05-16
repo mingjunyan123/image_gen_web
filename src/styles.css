@@ -239,7 +239,7 @@ textarea:focus {
 
 .dashboardGrid {
   display: grid;
-  grid-template-columns: minmax(340px, 0.92fr) minmax(360px, 1.15fr) minmax(300px, 0.78fr);
+  grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -254,6 +254,11 @@ textarea:focus {
   box-shadow: 0 12px 32px rgba(51, 75, 62, 0.08);
 }
 
+.sideColumn {
+  display: grid;
+  gap: 18px;
+}
+
 .panelTitle,
 .historyHead {
   display: flex;
@@ -266,8 +271,17 @@ textarea:focus {
   margin-bottom: 14px;
 }
 
+.historyPanel:not(.open) .historyHead {
+  margin-bottom: 0;
+}
+
 .panelTitle {
   margin-bottom: 16px;
+}
+
+.historyHead .panelTitle,
+.historyToggle .panelTitle {
+  margin-bottom: 0;
 }
 
 .panelTitle > span {
@@ -319,22 +333,6 @@ textarea:focus {
   box-shadow: 0 6px 16px rgba(51, 75, 62, 0.1);
 }
 
-.exampleRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.exampleRow button {
-  color: #147b69;
-  background: #eef8f1;
-  border: 1px solid #d6eadc;
-  border-radius: 999px;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 800;
-}
-
 .uploadBox {
   display: grid;
   gap: 8px;
@@ -377,8 +375,8 @@ textarea:focus {
 }
 
 .modelChoice {
-  min-height: 94px;
-  text-align: left;
+  min-height: 52px;
+  text-align: center;
   background: #fbfdfb;
   border: 1px solid #dce8de;
   border-radius: 8px;
@@ -391,7 +389,7 @@ textarea:focus {
 }
 
 .modelChoice strong {
-  margin-bottom: 7px;
+  margin-bottom: 0;
   color: #17211d;
 }
 
@@ -406,6 +404,19 @@ textarea:focus {
   border-color: #159079;
   background: #edf9f2;
   box-shadow: inset 0 0 0 1px rgba(21, 144, 121, 0.2);
+}
+
+.sizePreview {
+  color: #53665d;
+  background: #f1f8f4;
+  border: 1px solid #d8eadf;
+  border-radius: 8px;
+  padding: 11px 12px;
+  line-height: 1.5;
+}
+
+.sizePreview strong {
+  color: #143f36;
 }
 
 .optionSet {
@@ -545,9 +556,22 @@ textarea:focus {
 .jobList {
   display: grid;
   gap: 10px;
-  max-height: calc(100vh - 190px);
+  max-height: 360px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.historyToggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
 }
 
 .jobItem {
@@ -631,18 +655,9 @@ textarea:focus {
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 980px) {
   .dashboardGrid {
-    grid-template-columns: minmax(320px, 0.95fr) minmax(360px, 1.05fr);
-  }
-
-  .historyPanel {
-    grid-column: 1 / -1;
-  }
-
-  .jobList {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    max-height: none;
+    grid-template-columns: 1fr;
   }
 }
 

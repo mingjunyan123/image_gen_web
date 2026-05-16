@@ -4,6 +4,8 @@ import {
   AlertCircle,
   ArrowDownToLine,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   Eye,
   ImageIcon,
@@ -14,7 +16,6 @@ import {
   RefreshCw,
   Send,
   Sparkles,
-  Wand2,
   X,
 } from "lucide-react";
 import "./styles.css";
@@ -27,54 +28,74 @@ const MODEL_KEYS = {
 const modelOptions = [
   {
     value: MODEL_KEYS.GPT,
-    name: "标准图片",
-    text: "适合商品图、海报、精修和清晰成片。",
+    name: "GPT-Image-2",
   },
   {
     value: MODEL_KEYS.NANO,
-    name: "快速创作",
-    text: "适合多比例草图、灵感图和快速改图。",
+    name: "Nano Banana 2",
   },
 ];
 
-const sizeOptions = [
-  { value: "1024x1024", label: "方图", meta: "1024 x 1024" },
-  { value: "1536x1024", label: "横图", meta: "1536 x 1024" },
-  { value: "1024x1536", label: "竖图", meta: "1024 x 1536" },
-  { value: "2048x2048", label: "高清方图", meta: "2048 x 2048" },
-  { value: "2048x1152", label: "高清横图", meta: "2048 x 1152" },
-  { value: "3840x2160", label: "4K 横图", meta: "3840 x 2160" },
-  { value: "2160x3840", label: "4K 竖图", meta: "2160 x 3840" },
-  { value: "auto", label: "自动", meta: "交给系统选择" },
+const gptAspectOptions = [
+  { value: "1:1", label: "方图 1:1" },
+  { value: "3:2", label: "横图 3:2" },
+  { value: "2:3", label: "竖图 2:3" },
+  { value: "16:9", label: "宽屏 16:9" },
+  { value: "9:16", label: "竖屏 9:16" },
 ];
 
+const gptResolutionOptions = [
+  { value: "1K", label: "1K" },
+  { value: "2K", label: "2K" },
+  { value: "4K", label: "4K" },
+];
+
+const gptSizeMap = {
+  "1K": {
+    "1:1": "1024x1024",
+    "3:2": "1536x1024",
+    "2:3": "1024x1536",
+    "16:9": "1024x576",
+    "9:16": "576x1024",
+  },
+  "2K": {
+    "1:1": "2048x2048",
+    "3:2": "2048x1365",
+    "2:3": "1365x2048",
+    "16:9": "2048x1152",
+    "9:16": "1152x2048",
+  },
+  "4K": {
+    "1:1": "3840x3840",
+    "3:2": "3840x2560",
+    "2:3": "2560x3840",
+    "16:9": "3840x2160",
+    "9:16": "2160x3840",
+  },
+};
+
 const qualityOptions = [
-  { value: "auto", label: "自动", meta: "推荐" },
-  { value: "low", label: "更快", meta: "适合预览" },
-  { value: "medium", label: "均衡", meta: "日常使用" },
-  { value: "high", label: "更细致", meta: "适合成片" },
+  { value: "auto", label: "自动" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
 ];
 
 const formatOptions = [
-  { value: "png", label: "PNG", meta: "画质优先" },
-  { value: "jpeg", label: "JPEG", meta: "照片常用" },
-  { value: "webp", label: "WebP", meta: "网页常用" },
+  { value: "png", label: "PNG" },
+  { value: "jpeg", label: "JPEG" },
+  { value: "webp", label: "WebP" },
 ];
 
-const aspectRatioOptions = ["1:1", "3:2", "2:3", "4:3", "3:4", "4:5", "9:16", "16:9", "21:9"];
-const resolutionOptions = ["512", "1K", "2K", "4K"];
+const aspectRatioOptions = ["1:1", "3:2", "2:3", "4:3", "3:4", "4:5", "9:16", "16:9", "21:9"].map((value) => ({
+  value,
+  label: value,
+}));
 
-const examples = [
-  "一张高级商品海报：磨砂黑色智能音箱放在深灰石材台面，侧后方有暖色轮廓光，画面干净，有轻微景深和商业摄影质感。",
-  "为精品咖啡店生成官网首屏主视觉：清晨窗边、手冲咖啡、陶瓷杯、自然光，颜色温暖克制，适合品牌宣传。",
-  "生成 4K 横版科幻城市概念图：雨后夜景、玻璃高楼、霓虹反射、空中轻轨，电影感构图，细节丰富。",
-];
-
-const editExamples = [
-  "保留主体和构图，把背景换成干净的浅灰摄影棚，增加柔和阴影，让图片更适合电商展示。",
-  "保持人物五官和姿势不变，把光线改成温暖傍晚光，背景更简洁，整体像高端杂志封面。",
-  "保留产品外观，清理画面杂物，增强质感，颜色自然克制，适合品牌海报。",
-];
+const resolutionOptions = ["512", "1K", "2K", "4K"].map((value) => ({
+  value,
+  label: value,
+}));
 
 const statusText = {
   queued: "正在等待",
@@ -99,12 +120,14 @@ function App() {
   const [jobs, setJobs] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [jobsLoading, setJobsLoading] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [notice, setNotice] = useState("");
 
   const [mode, setMode] = useState("generate");
   const [modelKey, setModelKey] = useState(MODEL_KEYS.GPT);
-  const [prompt, setPrompt] = useState(examples[0]);
-  const [size, setSize] = useState("1024x1024");
+  const [prompt, setPrompt] = useState("");
+  const [gptAspectRatio, setGptAspectRatio] = useState("1:1");
+  const [gptResolution, setGptResolution] = useState("1K");
   const [quality, setQuality] = useState("auto");
   const [outputFormat, setOutputFormat] = useState("png");
   const [outputCompression, setOutputCompression] = useState(82);
@@ -118,6 +141,8 @@ function App() {
     jobs.find((job) => job.id === selectedJobId) || jobs[0] || null
   ), [jobs, selectedJobId]);
   const activeJob = jobs.find((job) => job.status === "processing" || job.status === "queued");
+  const resolvedGptSize = gptSizeMap[gptResolution]?.[gptAspectRatio] || "1024x1024";
+  const readableGptSize = resolvedGptSize.replace("x", " * ");
 
   useEffect(() => {
     checkSession();
@@ -207,7 +232,7 @@ function App() {
 
   function switchMode(nextMode) {
     setMode(nextMode);
-    setPrompt(nextMode === "edit" ? editExamples[0] : examples[0]);
+    setPrompt("");
     if (nextMode === "generate") clearSourceImage();
   }
 
@@ -251,7 +276,7 @@ function App() {
         mode,
         modelKey,
         prompt: cleanPrompt,
-        size,
+        size: modelKey === MODEL_KEYS.GPT ? resolvedGptSize : "auto",
         quality,
         outputFormat,
         outputCompression,
@@ -334,9 +359,7 @@ function App() {
     <main className="appShell">
       <header className="topBar">
         <div>
-          <p className="eyebrow">Domaeng Image</p>
           <h1>AI 图片工作台</h1>
-          <p>写下想法，提交后可离开页面，回来后继续查看进度和历史作品。</p>
         </div>
         <button className="ghostBtn" type="button" onClick={logout}>
           <LogOut size={18} />
@@ -354,14 +377,12 @@ function App() {
 
       <section className="dashboardGrid">
         <form className="controlPanel" onSubmit={submitJob}>
-          <PanelTitle icon={Wand2} title="创作设置" subtitle="填写想要的画面" />
-
           <Segmented
             value={mode}
             onChange={switchMode}
             options={[
-              { value: "generate", label: "生成图片", icon: Sparkles },
-              { value: "edit", label: "参考图片改图", icon: PencilLine },
+              { value: "generate", label: "文生图", icon: Sparkles },
+              { value: "edit", label: "图生图", icon: PencilLine },
             ]}
           />
 
@@ -369,14 +390,6 @@ function App() {
             <span>画面描述</span>
             <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} />
           </label>
-
-          <div className="exampleRow">
-            {(mode === "edit" ? editExamples : examples).map((item, index) => (
-              <button key={item} type="button" onClick={() => setPrompt(item)}>
-                示例 {index + 1}
-              </button>
-            ))}
-          </div>
 
           {mode === "edit" ? (
             <div className="uploadBox">
@@ -397,38 +410,35 @@ function App() {
                 onClick={() => setModelKey(model.value)}
               >
                 <strong>{model.name}</strong>
-                <span>{model.text}</span>
               </button>
             ))}
           </div>
 
           {modelKey === MODEL_KEYS.GPT ? (
             <>
-              <OptionGrid title="图片尺寸" value={size} onChange={setSize} options={sizeOptions} />
-              <OptionGrid title="细节程度" value={quality} onChange={setQuality} options={qualityOptions} />
-              <OptionGrid title="保存格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
+              <div className="twoCols">
+                <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
+                <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
+              </div>
+              <div className="sizePreview">
+                原始分辨率：<strong>{readableGptSize}</strong>
+              </div>
+              <div className="twoCols">
+                <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
+                <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
+              </div>
               {outputFormat !== "png" ? (
                 <label className="rangeBlock">
-                  <span>文件压缩</span>
-                  <input type="range" min="1" max="100" value={outputCompression} onChange={(event) => setOutputCompression(event.target.value)} />
+                  <span>压缩程度</span>
+                  <input type="range" min="0" max="100" value={outputCompression} onChange={(event) => setOutputCompression(Number(event.target.value))} />
                   <b>{outputCompression}%</b>
                 </label>
               ) : null}
             </>
           ) : (
             <div className="twoCols">
-              <label className="fieldBlock">
-                <span>画面比例</span>
-                <select value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)}>
-                  {aspectRatioOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="fieldBlock">
-                <span>清晰度</span>
-                <select value={resolution} onChange={(event) => setResolution(event.target.value)}>
-                  {resolutionOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
+              <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={aspectRatioOptions} />
+              <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
             </div>
           )}
 
@@ -438,20 +448,27 @@ function App() {
           </button>
         </form>
 
-        <section className="resultPanel">
-          <PanelTitle icon={Eye} title="作品预览" subtitle={selectedJob ? statusText[selectedJob.status] : "暂无作品"} />
-          <Preview job={selectedJob} onDownload={downloadCurrentImage} />
-        </section>
+        <div className="sideColumn">
+          <section className="resultPanel">
+            <PanelTitle icon={Eye} title="作品预览" subtitle={selectedJob ? statusText[selectedJob.status] : "暂无作品"} />
+            <Preview job={selectedJob} onDownload={downloadCurrentImage} />
+          </section>
 
-        <section className="historyPanel">
-          <div className="historyHead">
-            <PanelTitle icon={Clock3} title="作品记录" subtitle={activeJob ? statusText[activeJob.status] : "自动保存"} />
-            <button className="ghostIcon" type="button" onClick={() => refreshJobs(true)} aria-label="刷新记录">
-              <RefreshCw className={jobsLoading ? "spin" : ""} size={18} />
-            </button>
-          </div>
-          <JobList jobs={jobs} selectedId={selectedJob?.id} onSelect={setSelectedJobId} />
-        </section>
+          <section className={historyOpen ? "historyPanel open" : "historyPanel"}>
+            <div className="historyHead">
+              <button className="historyToggle" type="button" onClick={() => setHistoryOpen((value) => !value)}>
+                <PanelTitle icon={Clock3} title="历史记录" subtitle={activeJob ? statusText[activeJob.status] : `${jobs.length} 条记录`} />
+                {historyOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+              </button>
+              {historyOpen ? (
+                <button className="ghostIcon" type="button" onClick={() => refreshJobs(true)} aria-label="刷新记录">
+                  <RefreshCw className={jobsLoading ? "spin" : ""} size={18} />
+                </button>
+              ) : null}
+            </div>
+            {historyOpen ? <JobList jobs={jobs} selectedId={selectedJob?.id} onSelect={setSelectedJobId} /> : null}
+          </section>
+        </div>
       </section>
     </main>
   );
@@ -482,19 +499,16 @@ function Segmented({ value, onChange, options }) {
   );
 }
 
-function OptionGrid({ title, value, onChange, options }) {
+function SelectField({ label, value, onChange, options }) {
   return (
-    <fieldset className="optionSet">
-      <legend>{title}</legend>
-      <div>
+    <label className="fieldBlock">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => (
-          <button key={option.value} type="button" className={value === option.value ? "active" : ""} onClick={() => onChange(option.value)}>
-            <strong>{option.label}</strong>
-            <span>{option.meta}</span>
-          </button>
+          <option key={option.value} value={option.value}>{option.label}</option>
         ))}
-      </div>
-    </fieldset>
+      </select>
+    </label>
   );
 }
 
@@ -504,7 +518,7 @@ function Preview({ job, onDownload }) {
       <div className="emptyPreview">
         <ImageIcon size={42} />
         <strong>生成后的图片会显示在这里</strong>
-        <span>提交作品后，可以在右侧或下方记录里查看进度。</span>
+        <span>提交作品后，可以在历史记录里查看进度。</span>
       </div>
     );
   }

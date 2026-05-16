@@ -317,7 +317,7 @@ function safeOutputFormat(value) {
   return ["png", "jpeg", "webp"].includes(value) ? value : "png";
 }
 
-const NANO_ASPECT_RATIOS = new Set(["1:8", "8:1", "1:4", "4:1", "9:16", "16:9", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "1:1", "21:9"]);
+const NANO_ASPECT_RATIOS = new Set(["21:9", "8:1", "4:1", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16", "1:4", "1:8"]);
 
 function safeNanoAspectRatio(value) {
   return NANO_ASPECT_RATIOS.has(value) ? value : "1:1";

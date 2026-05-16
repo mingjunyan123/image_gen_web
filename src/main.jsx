@@ -47,17 +47,17 @@ const modelOptions = [
 ];
 
 const gptAspectOptions = [
-  { value: "9:21", label: "竖屏 9:21" },
-  { value: "21:9", label: "宽屏 21:9" },
-  { value: "9:16", label: "竖屏 9:16" },
-  { value: "16:9", label: "宽屏 16:9" },
-  { value: "2:3", label: "竖图 2:3" },
-  { value: "3:2", label: "横图 3:2" },
-  { value: "3:4", label: "竖图 3:4" },
-  { value: "4:3", label: "横图 4:3" },
-  { value: "4:5", label: "竖图 4:5" },
-  { value: "5:4", label: "横图 5:4" },
-  { value: "1:1", label: "方图 1:1" },
+  { value: "21:9", label: "21:9" },
+  { value: "16:9", label: "16:9" },
+  { value: "3:2", label: "3:2" },
+  { value: "4:3", label: "4:3" },
+  { value: "5:4", label: "5:4" },
+  { value: "1:1", label: "1:1" },
+  { value: "4:5", label: "4:5" },
+  { value: "3:4", label: "3:4" },
+  { value: "2:3", label: "2:3" },
+  { value: "9:16", label: "9:16" },
+  { value: "9:21", label: "9:21" },
 ];
 
 const gptResolutionOptions = [
@@ -121,7 +121,7 @@ const formatOptions = [
   { value: "webp", label: "WebP" },
 ];
 
-const nanoAspectRatioOptions = ["1:8", "8:1", "1:4", "4:1", "9:16", "16:9", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "1:1", "21:9"].map((value) => ({
+const nanoAspectRatioOptions = ["21:9", "8:1", "4:1", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16", "1:4", "1:8"].map((value) => ({
   value,
   label: value,
 }));

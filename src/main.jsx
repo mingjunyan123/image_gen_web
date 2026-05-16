@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Video,
   X,
 } from "lucide-react";
 import "./styles.css";
@@ -24,6 +25,19 @@ const MODEL_KEYS = {
   GPT: "gpt",
   NANO: "nano",
 };
+
+const MEDIA_TYPES = {
+  IMAGE: "image",
+  VIDEO: "video",
+};
+
+const VIDEO_MODES = {
+  TEXT: "text",
+  FIRST_FRAME: "first-frame",
+  FIRST_LAST_FRAME: "first-last-frame",
+};
+
+const LOCAL_PREVIEW = import.meta.env.DEV && new URLSearchParams(window.location.search).get("preview") === "1";
 
 const GPT_RESOLUTION_MODES = {
   PRESET: "preset",
@@ -131,6 +145,47 @@ const resolutionOptions = ["512", "1K", "2K", "4K"].map((value) => ({
   label: value,
 }));
 
+const jimengVideoRatioOptions = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].map((value) => ({
+  value,
+  label: value,
+}));
+
+const jimengVideoResolutionOptions = ["720p", "1080p"].map((value) => ({
+  value,
+  label: value,
+}));
+
+const jimengVideoModelOptions = [
+  "jimeng-video-veo3",
+  "jimeng-video-veo3.1",
+  "jimeng-video-sora2",
+].map((value) => ({
+  value,
+  label: displayJimengVideoModel(value),
+}));
+
+function displayJimengVideoModel(value) {
+  const suffix = value.replace(/^jimeng-video-/, "");
+  if (/^\d/.test(suffix)) return value;
+  return suffix;
+}
+
+function jimengVideoDurationOptions(model) {
+  if (model === "jimeng-video-veo3" || model === "jimeng-video-veo3.1") return [{ value: "8", label: "8 秒" }];
+  if (model === "jimeng-video-sora2") return ["4", "8", "12"].map((value) => ({ value, label: `${value} 秒` }));
+  if (model === "jimeng-video-seedance-2.0" || model === "jimeng-video-seedance-2.0-fast") {
+    return Array.from({ length: 12 }, (_, index) => String(index + 4)).map((value) => ({ value, label: `${value} 秒` }));
+  }
+  if (model === "jimeng-video-3.5-pro") return ["5", "10", "12"].map((value) => ({ value, label: `${value} 秒` }));
+  return ["5", "10"].map((value) => ({ value, label: `${value} 秒` }));
+}
+
+function defaultJimengDuration(model) {
+  if (model === "jimeng-video-veo3" || model === "jimeng-video-veo3.1") return "8";
+  if (model === "jimeng-video-sora2") return "4";
+  return "5";
+}
+
 const statusText = {
   queued: "正在等待",
   processing: "正在生成",
@@ -199,9 +254,29 @@ function readImageDimensions(url) {
   });
 }
 
+function makePreviewJob({ mediaType, mode, modelKey, prompt, params }) {
+  const timestamp = Date.now();
+  return {
+    id: `preview-${timestamp}`,
+    status: "queued",
+    mediaType,
+    provider: mediaType === MEDIA_TYPES.VIDEO ? "jimeng" : modelKey === MODEL_KEYS.NANO ? "gemini" : "openai",
+    mode,
+    modelKey,
+    prompt,
+    params,
+    imageUrl: null,
+    videoUrl: null,
+    errorMessage: null,
+    createdAt: timestamp,
+    startedAt: null,
+    finishedAt: null,
+  };
+}
+
 function App() {
-  const [checkingSession, setCheckingSession] = useState(true);
-  const [authenticated, setAuthenticated] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(!LOCAL_PREVIEW);
+  const [authenticated, setAuthenticated] = useState(LOCAL_PREVIEW);
   const [loginToken, setLoginToken] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -211,6 +286,7 @@ function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [notice, setNotice] = useState("");
 
+  const [mediaType, setMediaType] = useState(MEDIA_TYPES.IMAGE);
   const [mode, setMode] = useState("generate");
   const [modelKey, setModelKey] = useState(MODEL_KEYS.GPT);
   const [prompt, setPrompt] = useState("");
@@ -227,6 +303,15 @@ function App() {
   const [sourceImage, setSourceImage] = useState(null);
   const [sourcePreview, setSourcePreview] = useState("");
   const [sourceImageSize, setSourceImageSize] = useState(null);
+  const [videoMode, setVideoMode] = useState(VIDEO_MODES.TEXT);
+  const [videoModel, setVideoModel] = useState("jimeng-video-sora2");
+  const [videoRatio, setVideoRatio] = useState("16:9");
+  const [videoResolution, setVideoResolution] = useState("720p");
+  const [videoDuration, setVideoDuration] = useState("5");
+  const [firstFrame, setFirstFrame] = useState(null);
+  const [firstFramePreview, setFirstFramePreview] = useState("");
+  const [endFrame, setEndFrame] = useState(null);
+  const [endFramePreview, setEndFramePreview] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const sourcePreviewId = useRef(0);
 
@@ -242,12 +327,24 @@ function App() {
   const readableGptSize = resolvedGptSize.replace("x", " * ");
   const gptSizeError = modelKey === MODEL_KEYS.GPT && !activeGptValidation.valid ? activeGptValidation.error : "";
   const showGptExperimentalWarning = modelKey === MODEL_KEYS.GPT && activeGptValidation.valid && activeGptValidation.isExperimental;
+  const activeVideoDurationOptions = useMemo(() => jimengVideoDurationOptions(videoModel), [videoModel]);
+  const showVideoRatio = videoMode === VIDEO_MODES.TEXT;
+  const showVideoResolution = ["jimeng-video-3.0", "jimeng-video-3.0-fast"].includes(videoModel);
+  const fixedVideoDuration = activeVideoDurationOptions.length === 1;
 
   useEffect(() => {
+    if (LOCAL_PREVIEW) return;
     checkSession();
   }, []);
 
   useEffect(() => {
+    if (!activeVideoDurationOptions.some((option) => option.value === videoDuration)) {
+      setVideoDuration(defaultJimengDuration(videoModel));
+    }
+  }, [activeVideoDurationOptions, videoDuration, videoModel]);
+
+  useEffect(() => {
+    if (LOCAL_PREVIEW) return undefined;
     if (!authenticated) return undefined;
     refreshJobs(false);
     const timer = window.setInterval(() => refreshJobs(false), 2500);
@@ -257,6 +354,14 @@ function App() {
   useEffect(() => () => {
     if (sourcePreview) URL.revokeObjectURL(sourcePreview);
   }, [sourcePreview]);
+
+  useEffect(() => () => {
+    if (firstFramePreview) URL.revokeObjectURL(firstFramePreview);
+  }, [firstFramePreview]);
+
+  useEffect(() => () => {
+    if (endFramePreview) URL.revokeObjectURL(endFramePreview);
+  }, [endFramePreview]);
 
   async function api(path, options = {}) {
     const response = await fetch(path, {
@@ -306,6 +411,11 @@ function App() {
   }
 
   async function logout() {
+    if (LOCAL_PREVIEW) {
+      setJobs([]);
+      setSelectedJobId(null);
+      return;
+    }
     await api("/image-api/auth/logout", { method: "POST", body: JSON.stringify({}) }).catch(() => {});
     setAuthenticated(false);
     setJobs([]);
@@ -333,6 +443,19 @@ function App() {
     setMode(nextMode);
     setPrompt("");
     if (nextMode === "generate") clearSourceImage();
+  }
+
+  function switchMediaType(nextMediaType) {
+    setMediaType(nextMediaType);
+    setPrompt("");
+    setNotice("");
+    if (nextMediaType === MEDIA_TYPES.IMAGE) {
+      setVideoMode(VIDEO_MODES.TEXT);
+      clearVideoFrames();
+    } else {
+      setMode("generate");
+      clearSourceImage();
+    }
   }
 
   function updateSourceImage(file) {
@@ -373,6 +496,45 @@ function App() {
     setSourceImageSize(null);
   }
 
+  function updateVideoFrame(kind, file) {
+    if (kind === "first") clearFirstFrame();
+    if (kind === "end") clearEndFrame();
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setNotice("请上传 PNG、JPG 或 WebP 图片。");
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      setNotice("图片不能超过 50MB。");
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    if (kind === "first") {
+      setFirstFrame(file);
+      setFirstFramePreview(preview);
+    } else {
+      setEndFrame(file);
+      setEndFramePreview(preview);
+    }
+  }
+
+  function clearFirstFrame() {
+    if (firstFramePreview) URL.revokeObjectURL(firstFramePreview);
+    setFirstFrame(null);
+    setFirstFramePreview("");
+  }
+
+  function clearEndFrame() {
+    if (endFramePreview) URL.revokeObjectURL(endFramePreview);
+    setEndFrame(null);
+    setEndFramePreview("");
+  }
+
+  function clearVideoFrames() {
+    clearFirstFrame();
+    clearEndFrame();
+  }
+
   async function submitJob(event) {
     event.preventDefault();
     const cleanPrompt = prompt.trim();
@@ -380,11 +542,19 @@ function App() {
       setNotice("请先写下想生成的内容。");
       return;
     }
-    if (mode === "edit" && !sourceImage) {
+    if (mediaType === MEDIA_TYPES.IMAGE && mode === "edit" && !sourceImage) {
       setNotice("请先上传一张参考图片。");
       return;
     }
-    if (modelKey === MODEL_KEYS.GPT && !activeGptValidation.valid) {
+    if (mediaType === MEDIA_TYPES.VIDEO && videoMode !== VIDEO_MODES.TEXT && !firstFrame) {
+      setNotice("请先上传首帧图片。");
+      return;
+    }
+    if (mediaType === MEDIA_TYPES.VIDEO && videoMode === VIDEO_MODES.FIRST_LAST_FRAME && !endFrame) {
+      setNotice("请先上传尾帧图片。");
+      return;
+    }
+    if (mediaType === MEDIA_TYPES.IMAGE && modelKey === MODEL_KEYS.GPT && !activeGptValidation.valid) {
       setNotice(activeGptValidation.error);
       return;
     }
@@ -392,7 +562,39 @@ function App() {
     setSubmitting(true);
     setNotice("");
     try {
-      const fields = modelKey === MODEL_KEYS.GPT ? {
+      let body;
+      let previewJob;
+      if (mediaType === MEDIA_TYPES.VIDEO) {
+        const fields = {
+          mediaType: MEDIA_TYPES.VIDEO,
+          provider: "jimeng",
+          videoMode,
+          jimengModel: videoModel,
+          prompt: cleanPrompt,
+          duration: videoDuration,
+          functionMode: "first_last_frames",
+          responseFormat: "url",
+        };
+        if (showVideoRatio) fields.ratio = videoRatio;
+        if (showVideoResolution) fields.videoResolution = videoResolution;
+        previewJob = makePreviewJob({
+          mediaType: MEDIA_TYPES.VIDEO,
+          mode: videoMode,
+          modelKey: videoModel,
+          prompt: cleanPrompt,
+          params: fields,
+        });
+        if (videoMode === VIDEO_MODES.TEXT) {
+          body = JSON.stringify(fields);
+        } else {
+          body = new FormData();
+          Object.entries(fields).forEach(([key, value]) => body.append(key, value));
+          body.append("firstFrame", firstFrame, firstFrame.name);
+          if (videoMode === VIDEO_MODES.FIRST_LAST_FRAME) body.append("endFrame", endFrame, endFrame.name);
+        }
+      } else {
+        const fields = modelKey === MODEL_KEYS.GPT ? {
+          mediaType: MEDIA_TYPES.IMAGE,
         mode,
         modelKey,
         prompt: cleanPrompt,
@@ -403,19 +605,34 @@ function App() {
         outputCompression,
         moderation: "auto",
       } : {
+        mediaType: MEDIA_TYPES.IMAGE,
         mode,
         modelKey,
         prompt: cleanPrompt,
         aspectRatio,
         resolution,
       };
-      let body;
-      if (mode === "edit") {
-        body = new FormData();
-        Object.entries(fields).forEach(([key, value]) => body.append(key, value));
-        body.append("image", sourceImage, sourceImage.name);
-      } else {
-        body = JSON.stringify(fields);
+        previewJob = makePreviewJob({
+          mediaType: MEDIA_TYPES.IMAGE,
+          mode,
+          modelKey,
+          prompt: cleanPrompt,
+          params: fields,
+        });
+        if (mode === "edit") {
+          body = new FormData();
+          Object.entries(fields).forEach(([key, value]) => body.append(key, value));
+          body.append("image", sourceImage, sourceImage.name);
+        } else {
+          body = JSON.stringify(fields);
+        }
+      }
+
+      if (LOCAL_PREVIEW) {
+        setJobs((currentJobs) => [previewJob, ...currentJobs]);
+        setSelectedJobId(previewJob.id);
+        setNotice("预览模式已创建一条本地任务，不会调用后端。");
+        return;
       }
 
       const payload = await api("/image-api/jobs", { method: "POST", body });
@@ -430,10 +647,13 @@ function App() {
   }
 
   function downloadCurrentImage() {
-    if (!selectedJob?.imageUrl) return;
+    const url = selectedJob?.videoUrl || selectedJob?.imageUrl;
+    if (!url) return;
     const link = document.createElement("a");
-    link.href = selectedJob.imageUrl;
-    link.download = `domaeng-image-${selectedJob.id}.png`;
+    link.href = url;
+    link.download = selectedJob?.mediaType === MEDIA_TYPES.VIDEO
+      ? `domaeng-video-${selectedJob.id}.mp4`
+      : `domaeng-image-${selectedJob.id}.png`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -484,7 +704,7 @@ function App() {
     <main className="appShell">
       <header className="topBar">
         <div>
-          <h1>AI 图片工作台</h1>
+          <h1>AI 创作工作台</h1>
         </div>
         <button className="ghostBtn" type="button" onClick={logout}>
           <LogOut size={18} />
@@ -503,20 +723,45 @@ function App() {
       <section className="dashboardGrid">
         <form className="controlPanel" onSubmit={submitJob}>
           <Segmented
-            value={mode}
-            onChange={switchMode}
+            value={mediaType}
+            onChange={switchMediaType}
             options={[
-              { value: "generate", label: "文生图", icon: Sparkles },
-              { value: "edit", label: "图生图", icon: PencilLine },
+              { value: MEDIA_TYPES.IMAGE, label: "图片", icon: ImageIcon },
+              { value: MEDIA_TYPES.VIDEO, label: "视频", icon: Video },
             ]}
           />
 
+          {mediaType === MEDIA_TYPES.IMAGE ? (
+            <Segmented
+              value={mode}
+              onChange={switchMode}
+              options={[
+                { value: "generate", label: "文生图", icon: Sparkles },
+                { value: "edit", label: "图生图", icon: PencilLine },
+              ]}
+            />
+          ) : (
+            <Segmented
+              value={videoMode}
+              onChange={(nextMode) => {
+                setVideoMode(nextMode);
+                if (nextMode === VIDEO_MODES.TEXT) clearVideoFrames();
+                if (nextMode === VIDEO_MODES.FIRST_FRAME) clearEndFrame();
+              }}
+              options={[
+                { value: VIDEO_MODES.TEXT, label: "文生视频", icon: Sparkles },
+                { value: VIDEO_MODES.FIRST_FRAME, label: "首帧图", icon: ImageIcon },
+                { value: VIDEO_MODES.FIRST_LAST_FRAME, label: "首尾帧", icon: Video },
+              ]}
+            />
+          )}
+
           <label className="fieldBlock">
-            <span>画面描述</span>
+            <span>{mediaType === MEDIA_TYPES.VIDEO ? "视频描述" : "画面描述"}</span>
             <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} />
           </label>
 
-          {mode === "edit" ? (
+          {mediaType === MEDIA_TYPES.IMAGE && mode === "edit" ? (
             <div className="uploadBox">
               <label>
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => updateSourceImage(event.target.files?.[0])} />
@@ -526,77 +771,125 @@ function App() {
             </div>
           ) : null}
 
-          <div className="modelGrid">
-            {modelOptions.map((model) => (
-              <button
-                key={model.value}
-                type="button"
-                className={modelKey === model.value ? "modelChoice active" : "modelChoice"}
-                onClick={() => setModelKey(model.value)}
-              >
-                <strong>{model.name}</strong>
-              </button>
-            ))}
-          </div>
-
-          {modelKey === MODEL_KEYS.GPT ? (
-            <>
-              <Segmented
-                value={gptResolutionMode}
-                onChange={setGptResolutionMode}
-                options={[
-                  { value: GPT_RESOLUTION_MODES.PRESET, label: "预设分辨率" },
-                  { value: GPT_RESOLUTION_MODES.CUSTOM, label: "自定义分辨率" },
-                ]}
+          {mediaType === MEDIA_TYPES.VIDEO && videoMode !== VIDEO_MODES.TEXT ? (
+            <div className="videoFrameGrid">
+              <FrameUpload
+                label="首帧图片"
+                preview={firstFramePreview}
+                onChange={(file) => updateVideoFrame("first", file)}
+                onClear={clearFirstFrame}
               />
-              {gptResolutionMode === GPT_RESOLUTION_MODES.PRESET ? (
-                <div className="twoCols">
-                  <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
-                  <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
-                </div>
-              ) : (
-                <div className="customSizeBlock">
-                  <div className="dimensionRow">
-                    <label className="fieldBlock">
-                      <span>宽</span>
-                      <input value={gptCustomWidth} inputMode="numeric" onChange={(event) => setGptCustomWidth(event.target.value)} />
-                    </label>
-                    <span className="dimensionDivider">X</span>
-                    <label className="fieldBlock">
-                      <span>高</span>
-                      <input value={gptCustomHeight} inputMode="numeric" onChange={(event) => setGptCustomHeight(event.target.value)} />
-                    </label>
+              {videoMode === VIDEO_MODES.FIRST_LAST_FRAME ? (
+                <FrameUpload
+                  label="尾帧图片"
+                  preview={endFramePreview}
+                  onChange={(file) => updateVideoFrame("end", file)}
+                  onClear={clearEndFrame}
+                />
+              ) : null}
+            </div>
+          ) : null}
+
+          {mediaType === MEDIA_TYPES.IMAGE ? (
+            <>
+              <div className="modelGrid">
+                {modelOptions.map((model) => (
+                  <button
+                    key={model.value}
+                    type="button"
+                    className={modelKey === model.value ? "modelChoice active" : "modelChoice"}
+                    onClick={() => setModelKey(model.value)}
+                  >
+                    <strong>{model.name}</strong>
+                  </button>
+                ))}
+              </div>
+
+              {modelKey === MODEL_KEYS.GPT ? (
+                <>
+                  <Segmented
+                    value={gptResolutionMode}
+                    onChange={setGptResolutionMode}
+                    options={[
+                      { value: GPT_RESOLUTION_MODES.PRESET, label: "预设分辨率" },
+                      { value: GPT_RESOLUTION_MODES.CUSTOM, label: "自定义分辨率" },
+                    ]}
+                  />
+                  {gptResolutionMode === GPT_RESOLUTION_MODES.PRESET ? (
+                    <div className="twoCols">
+                      <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
+                      <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
+                    </div>
+                  ) : (
+                    <div className="customSizeBlock">
+                      <div className="dimensionRow">
+                        <label className="fieldBlock">
+                          <span>宽</span>
+                          <input value={gptCustomWidth} inputMode="numeric" onChange={(event) => setGptCustomWidth(event.target.value)} />
+                        </label>
+                        <span className="dimensionDivider">X</span>
+                        <label className="fieldBlock">
+                          <span>高</span>
+                          <input value={gptCustomHeight} inputMode="numeric" onChange={(event) => setGptCustomHeight(event.target.value)} />
+                        </label>
+                      </div>
+                      {sourceImageSize ? (
+                        <p className="helperText">已读取上传图片：{sourceImageSize.width} x {sourceImageSize.height}</p>
+                      ) : null}
+                      {gptSizeError ? <p className="fieldError">{gptSizeError}</p> : null}
+                    </div>
+                  )}
+                  <div className="sizePreview">
+                    图片分辨率：<strong>{readableGptSize}</strong>
                   </div>
-                  {sourceImageSize ? (
-                    <p className="helperText">已读取上传图片：{sourceImageSize.width} x {sourceImageSize.height}</p>
+                  {showGptExperimentalWarning ? <div className="warningBox">{GPT_EXPERIMENTAL_MESSAGE}</div> : null}
+                  <div className="twoCols">
+                    <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
+                    <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
+                  </div>
+                  {outputFormat !== "png" ? (
+                    <label className="rangeBlock">
+                      <span>压缩程度</span>
+                      <input type="range" min="0" max="100" value={outputCompression} onChange={(event) => setOutputCompression(Number(event.target.value))} />
+                      <b>{outputCompression}%</b>
+                    </label>
                   ) : null}
-                  {gptSizeError ? <p className="fieldError">{gptSizeError}</p> : null}
+                </>
+              ) : (
+                <div className="twoCols">
+                  <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />
+                  <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
                 </div>
               )}
-              <div className="sizePreview">
-                原始分辨率：<strong>{readableGptSize}</strong>
-              </div>
-              {showGptExperimentalWarning ? <div className="warningBox">{GPT_EXPERIMENTAL_MESSAGE}</div> : null}
-              <div className="twoCols">
-                <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
-                <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
-              </div>
-              {outputFormat !== "png" ? (
-                <label className="rangeBlock">
-                  <span>压缩程度</span>
-                  <input type="range" min="0" max="100" value={outputCompression} onChange={(event) => setOutputCompression(Number(event.target.value))} />
-                  <b>{outputCompression}%</b>
-                </label>
-              ) : null}
             </>
           ) : (
-            <div className="twoCols">
-              <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />
-              <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
-            </div>
+            <>
+              <SelectField label="model" value={videoModel} onChange={setVideoModel} options={jimengVideoModelOptions.map((model) => ({
+                value: model.value,
+                label: model.label,
+              }))} />
+              <div className="twoCols">
+                {showVideoRatio ? (
+                  <SelectField label="视频比例" value={videoRatio} onChange={setVideoRatio} options={jimengVideoRatioOptions} />
+                ) : (
+                  <div />
+                )}
+                {fixedVideoDuration ? (
+                  <div className="readonlyField">
+                    <span>时长</span>
+                    <strong>{videoDuration} 秒</strong>
+                  </div>
+                ) : (
+                  <SelectField label="时长" value={videoDuration} onChange={setVideoDuration} options={activeVideoDurationOptions} />
+                )}
+              </div>
+              {showVideoResolution ? (
+                <SelectField label="清晰度" value={videoResolution} onChange={setVideoResolution} options={jimengVideoResolutionOptions} />
+              ) : null}
+            </>
           )}
 
-          <button className="primaryBtn submitBtn" disabled={submitting || Boolean(gptSizeError)}>
+          <button className="primaryBtn submitBtn" disabled={submitting || (mediaType === MEDIA_TYPES.IMAGE && Boolean(gptSizeError))}>
             {submitting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
             {submitting ? "正在提交" : "开始生成"}
           </button>
@@ -666,26 +959,44 @@ function SelectField({ label, value, onChange, options }) {
   );
 }
 
+function FrameUpload({ label, preview, onChange, onClear }) {
+  return (
+    <div className="uploadBox frameUpload">
+      <label>
+        <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => onChange(event.target.files?.[0])} />
+        {preview ? <img src={preview} alt={`${label}预览`} /> : <span><ImageIcon size={26} />{label}</span>}
+      </label>
+      {preview ? <button type="button" className="textBtn" onClick={onClear}>移除图片</button> : null}
+    </div>
+  );
+}
+
 function Preview({ job, onDownload }) {
   if (!job) {
     return (
       <div className="emptyPreview">
         <ImageIcon size={42} />
-        <strong>生成后的图片会显示在这里</strong>
+        <strong>生成后的作品会显示在这里</strong>
         <span>提交作品后，可以在历史记录里查看进度。</span>
       </div>
     );
   }
 
   const Icon = statusIcon[job.status] || Clock3;
+  const resultUrl = job.videoUrl || job.imageUrl;
+  const isVideo = job.mediaType === MEDIA_TYPES.VIDEO;
   return (
     <div className="previewWrap">
       <div className={`statusPill ${job.status}`}>
         <Icon className={job.status === "processing" ? "spin" : ""} size={16} />
         {statusText[job.status]}
       </div>
-      {job.imageUrl ? (
-        <img className="resultImage" src={job.imageUrl} alt="生成结果" />
+      {resultUrl ? (
+        isVideo ? (
+          <video className="resultVideo" src={resultUrl} controls playsInline />
+        ) : (
+          <img className="resultImage" src={resultUrl} alt="生成结果" />
+        )
       ) : (
         <div className="waitingBox">
           <Loader2 className={job.status === "failed" ? "" : "spin"} size={38} />
@@ -695,10 +1006,10 @@ function Preview({ job, onDownload }) {
       )}
       <div className="previewMeta">
         <p>{job.prompt}</p>
-        {job.imageUrl ? (
+        {resultUrl ? (
           <button className="secondaryBtn" type="button" onClick={onDownload}>
             <ArrowDownToLine size={17} />
-            下载图片
+            {isVideo ? "下载视频" : "下载图片"}
           </button>
         ) : null}
       </div>
@@ -719,13 +1030,17 @@ function JobList({ jobs, selectedId, onSelect }) {
     <div className="jobList">
       {jobs.map((job) => {
         const Icon = statusIcon[job.status] || Clock3;
+        const resultUrl = job.videoUrl || job.imageUrl;
+        const isVideo = job.mediaType === MEDIA_TYPES.VIDEO;
         return (
           <button key={job.id} type="button" className={selectedId === job.id ? "jobItem active" : "jobItem"} onClick={() => onSelect(job.id)}>
             <div className="thumb">
-              {job.imageUrl ? <img src={job.imageUrl} alt="" /> : <Icon className={job.status === "processing" ? "spin" : ""} size={22} />}
+              {resultUrl && !isVideo ? <img src={resultUrl} alt="" /> : (
+                isVideo ? <Video size={22} /> : <Icon className={job.status === "processing" ? "spin" : ""} size={22} />
+              )}
             </div>
             <div>
-              <strong>{statusText[job.status]}</strong>
+              <strong>{isVideo ? "视频" : "图片"} · {statusText[job.status]}</strong>
               <span>{job.prompt}</span>
               <small>{formatTime(job.createdAt)}</small>
             </div>

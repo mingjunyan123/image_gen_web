@@ -14,8 +14,8 @@ services:
       FRONTEND_BASE_URL: "https://domaeng.com"
 
       # 防止长输出/流式输出太快超时
-      STREAMING_TIMEOUT: "300"
-      RELAY_TIMEOUT: "300"
+      STREAMING_TIMEOUT: "600"
+      RELAY_TIMEOUT: "600"
 
       # 单机 SQLite 先不启用 Redis / 批量更新
       BATCH_UPDATE_ENABLED: "false"
@@ -49,29 +49,14 @@ services:
     networks:
       - ai-gateway
 
-  image-service:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: image-service
+  jimeng-api:
+    image: ghcr.io/iptag/jimeng-api:latest
+    container_name: jimeng-api
     restart: always
     environment:
       TZ: Asia/Singapore
-      PORT: "3000"
-      NEW_API_BASE_URL: "http://new-api:3000"
-      IMAGE_DATA_DIR: "/data/image-service"
-      # 线上请改成一段新的长随机字符串，改动后旧 token 加密内容将无法解密。
-      IMAGE_SERVICE_SECRET: "change-this-image-service-secret-before-production"
-      IMAGE_SESSION_DAYS: "7"
-      IMAGE_MAX_GLOBAL_PROCESSING: "1"
-      IMAGE_MAX_TOKEN_PROCESSING: "1"
-      IMAGE_MAX_TOKEN_QUEUED: "5"
-    volumes:
-      - ./image-service-data:/data/image-service
     expose:
-      - "3000"
-    depends_on:
-      - new-api
+      - "5100"
     networks:
       - ai-gateway
 
@@ -83,6 +68,7 @@ services:
       - new-api
       - cliproxyapi
       - image-service
+      - jimeng-api
     ports:
       - "80:80"
       - "443:443"

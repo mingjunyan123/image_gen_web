@@ -10,14 +10,22 @@ services:
       PORT: "3000"
       NEW_API_BASE_URL: "http://new-api:3000"
       IMAGE_DATA_DIR: "/data/image-service"
-      IMAGE_SERVICE_SECRET: "change-this-image-service-secret-before-production"
+      IMAGE_SERVICE_SECRET: "c55ba91a3eea2c6a03692c46fcdbcd8ab29bfc0091f5de115dff51b3261583a9"
       IMAGE_SESSION_DAYS: "7"
       IMAGE_MAX_GLOBAL_PROCESSING: "1"
       IMAGE_MAX_TOKEN_PROCESSING: "1"
       IMAGE_MAX_TOKEN_QUEUED: "5"
+      IMAGE_REQUEST_TIMEOUT_MS: "600000"
+      JIMENG_API_BASE_URL: "http://jimeng-api:5100"
+      JIMENG_SESSION_ID: ""
+      JIMENG_REGION: "cn"
+      VIDEO_REQUEST_TIMEOUT_MS: "2400000"
     volumes:
       - ./image-service-data:/data/image-service
     expose:
       - "3000"
+    depends_on:
+      - new-api
+      - jimeng-api
     networks:
       - ai-gateway

@@ -15,7 +15,10 @@ const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.IMAGE_DATA_DIR || "/data/image-service";
 const DB_PATH = path.join(DATA_DIR, "app.db");
 const IMAGE_DIR = path.join(DATA_DIR, "images");
+const VIDEO_DIR = path.join(DATA_DIR, "videos");
 const NEW_API_BASE_URL = (process.env.NEW_API_BASE_URL || "http://new-api:3000").replace(/\/+$/, "");
+const JIMENG_API_BASE_URL = (process.env.JIMENG_API_BASE_URL || "http://jimeng-api:5100").replace(/\/+$/, "");
+const JIMENG_SESSION_ID = cleanJimengToken(process.env.JIMENG_SESSION_ID || "");
 const SERVICE_SECRET = process.env.IMAGE_SERVICE_SECRET || "change-me-image-service-secret";
 const TOKEN_PEPPER = process.env.IMAGE_TOKEN_PEPPER || SERVICE_SECRET;
 const SESSION_DAYS = Number(process.env.IMAGE_SESSION_DAYS || 7);
@@ -24,8 +27,12 @@ const MAX_TOKEN_PROCESSING = Number(process.env.IMAGE_MAX_TOKEN_PROCESSING || 1)
 const MAX_TOKEN_QUEUED = Number(process.env.IMAGE_MAX_TOKEN_QUEUED || 5);
 const WORKER_INTERVAL_MS = Number(process.env.IMAGE_WORKER_INTERVAL_MS || 1500);
 const REQUEST_TIMEOUT_MS = Number(process.env.IMAGE_REQUEST_TIMEOUT_MS || 600000);
+const VIDEO_REQUEST_TIMEOUT_MS = Number(process.env.VIDEO_REQUEST_TIMEOUT_MS || 2400000);
 const MAX_IMAGE_BYTES = Number(process.env.IMAGE_MAX_UPLOAD_BYTES || 50 * 1024 * 1024);
 const SESSION_COOKIE = "image_session";
+const MISSING_IMAGE_MESSAGE = "上游模型这次没有返回图片，只返回了文字或空结果。请稍后重试；如果连续出现，请调整提示词或换一个模型。";
+const MISSING_VIDEO_MESSAGE = "上游模型这次没有返回视频，只返回了文字或空结果。请稍后重试；如果连续出现，请调整提示词或换一个模型。";
+const UPSTREAM_LOG_TEXT_LIMIT = 500;
 
 if (!process.env.IMAGE_SERVICE_SECRET) {
   console.warn("[image-service] IMAGE_SERVICE_SECRET is not set. Set a long random value before production use.");
@@ -35,6 +42,9 @@ await mkdir(DATA_DIR, { recursive: true });
 await mkdir(IMAGE_DIR, { recursive: true });
 await mkdir(path.join(IMAGE_DIR, "sources"), { recursive: true });
 await mkdir(path.join(IMAGE_DIR, "results"), { recursive: true });
+await mkdir(VIDEO_DIR, { recursive: true });
+await mkdir(path.join(VIDEO_DIR, "sources"), { recursive: true });
+await mkdir(path.join(VIDEO_DIR, "results"), { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
 db.exec(`
@@ -63,13 +73,19 @@ db.exec(`
     id TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     status TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT 'image',
+    provider TEXT NOT NULL DEFAULT 'openai',
     mode TEXT NOT NULL,
     model_key TEXT NOT NULL,
     params_json TEXT NOT NULL,
     source_image_path TEXT,
     source_image_name TEXT,
     source_image_mime TEXT,
+    source_end_image_path TEXT,
+    source_end_image_name TEXT,
+    source_end_image_mime TEXT,
     result_image_path TEXT,
+    result_media_path TEXT,
     result_mime TEXT,
     image_slug TEXT UNIQUE,
     error_message TEXT,
@@ -91,6 +107,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_jobs_slug ON jobs(image_slug);
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 `);
+
+function ensureColumn(tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some((column) => column.name === columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+ensureColumn("jobs", "media_type", "TEXT NOT NULL DEFAULT 'image'");
+ensureColumn("jobs", "provider", "TEXT NOT NULL DEFAULT 'openai'");
+ensureColumn("jobs", "source_end_image_path", "TEXT");
+ensureColumn("jobs", "source_end_image_name", "TEXT");
+ensureColumn("jobs", "source_end_image_mime", "TEXT");
+ensureColumn("jobs", "result_media_path", "TEXT");
 
 db.prepare(`
   UPDATE jobs
@@ -138,6 +168,10 @@ function decryptToken(user) {
 
 function cleanToken(value) {
   return String(value || "").trim().replace(/^Bearer\s+/i, "");
+}
+
+function cleanJimengToken(value) {
+  return String(value || "").trim().replace(/^Bearer\s+/i, "").replace(/^sessionid=/i, "");
 }
 
 function parseCookies(req) {
@@ -304,12 +338,18 @@ function contentTypeToExtension(mime, fallback = "png") {
   if (mime === "image/jpeg" || mime === "image/jpg") return "jpg";
   if (mime === "image/webp") return "webp";
   if (mime === "image/png") return "png";
+  if (mime === "video/mp4") return "mp4";
+  if (mime === "video/webm") return "webm";
+  if (mime === "video/quicktime") return "mov";
   return fallback;
 }
 
 function extensionToMime(ext) {
   if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
   if (ext === "webp") return "image/webp";
+  if (ext === "mp4") return "video/mp4";
+  if (ext === "webm") return "video/webm";
+  if (ext === "mov") return "video/quicktime";
   return "image/png";
 }
 
@@ -321,6 +361,46 @@ const NANO_ASPECT_RATIOS = new Set(["21:9", "8:1", "4:1", "16:9", "3:2", "4:3", 
 
 function safeNanoAspectRatio(value) {
   return NANO_ASPECT_RATIOS.has(value) ? value : "1:1";
+}
+
+const JIMENG_VIDEO_MODES = new Set(["text", "first-frame", "first-last-frame"]);
+const JIMENG_VIDEO_RATIOS = new Set(["1:1", "4:3", "3:4", "16:9", "9:16", "21:9"]);
+const JIMENG_VIDEO_RESOLUTIONS = new Set(["720p", "1080p"]);
+const JIMENG_VIDEO_MODELS = new Set([
+  "jimeng-video-seedance-2.0",
+  "jimeng-video-seedance-2.0-fast",
+  "jimeng-video-3.5-pro",
+  "jimeng-video-veo3",
+  "jimeng-video-veo3.1",
+  "jimeng-video-sora2",
+  "jimeng-video-3.0-pro",
+  "jimeng-video-3.0",
+  "jimeng-video-3.0-fast",
+  "jimeng-video-2.0-pro",
+  "jimeng-video-2.0",
+]);
+
+function safeJimengVideoRatio(value) {
+  return JIMENG_VIDEO_RATIOS.has(value) ? value : "16:9";
+}
+
+function safeJimengVideoResolution(value) {
+  return JIMENG_VIDEO_RESOLUTIONS.has(value) ? value : "720p";
+}
+
+function safeJimengVideoModel(value) {
+  return JIMENG_VIDEO_MODELS.has(value) ? value : "jimeng-video-3.5-pro";
+}
+
+function safeJimengVideoDuration(model, value) {
+  const duration = Number(value);
+  if (model === "jimeng-video-veo3" || model === "jimeng-video-veo3.1") return "8";
+  if (model === "jimeng-video-sora2") return ["4", "8", "12"].includes(String(value)) ? String(value) : "4";
+  if (model === "jimeng-video-seedance-2.0" || model === "jimeng-video-seedance-2.0-fast") {
+    return Number.isInteger(duration) && duration >= 4 && duration <= 15 ? String(duration) : "5";
+  }
+  if (model === "jimeng-video-3.5-pro") return ["5", "10", "12"].includes(String(value)) ? String(value) : "5";
+  return ["5", "10"].includes(String(value)) ? String(value) : "5";
 }
 
 const GPT_MAX_LONG_SIDE = 3840;
@@ -366,6 +446,30 @@ function validateGptSizeString(size) {
 }
 
 function normalizeJobParams(input) {
+  const mediaType = input.mediaType === "video" ? "video" : "image";
+  if (mediaType === "video") {
+    const prompt = String(input.prompt || "").trim();
+    if (!prompt) throw httpError(400, "请先写下想生成的视频内容。");
+    const videoMode = JIMENG_VIDEO_MODES.has(input.videoMode) ? input.videoMode : "text";
+    const jimengModel = safeJimengVideoModel(String(input.jimengModel || "jimeng-video-3.5-pro").trim());
+    const params = {
+      mediaType,
+      provider: "jimeng",
+      mode: videoMode,
+      modelKey: "jimeng",
+      jimengModel,
+      prompt,
+      duration: safeJimengVideoDuration(jimengModel, input.duration),
+      functionMode: "first_last_frames",
+      responseFormat: "url",
+    };
+    if (videoMode === "text") params.ratio = safeJimengVideoRatio(input.ratio);
+    if (jimengModel === "jimeng-video-3.0" || jimengModel === "jimeng-video-3.0-fast") {
+      params.resolution = safeJimengVideoResolution(input.videoResolution);
+    }
+    return params;
+  }
+
   const mode = input.mode === "edit" ? "edit" : "generate";
   const modelKey = input.modelKey === "nano" ? "nano" : "gpt";
   const prompt = String(input.prompt || "").trim();
@@ -381,6 +485,8 @@ function normalizeJobParams(input) {
   const gptSizeValidation = modelKey === "gpt" ? validateGptSizeString(requestedSize) : { valid: true, size: requestedSize };
   if (!gptSizeValidation.valid) throw httpError(400, gptSizeValidation.error);
   const params = {
+    mediaType,
+    provider: modelKey === "nano" ? "gemini" : "openai",
     mode,
     modelKey,
     prompt,
@@ -434,22 +540,31 @@ async function parseJobRequest(req) {
   if (contentType.startsWith("multipart/form-data")) {
     const boundary = /boundary=([^;]+)/i.exec(contentType)?.[1];
     if (!boundary) throw httpError(400, "上传内容格式不正确。");
-    const parsed = parseMultipartBody(await readBody(req, MAX_IMAGE_BYTES + 1024 * 1024), boundary);
-    return { fields: parsed.fields, file: parsed.files.image || null };
+    const parsed = parseMultipartBody(await readBody(req, MAX_IMAGE_BYTES * 2 + 1024 * 1024), boundary);
+    return {
+      fields: parsed.fields,
+      file: parsed.files.image || null,
+      files: parsed.files,
+    };
   }
-  return { fields: await readJson(req, 512 * 1024), file: null };
+  return { fields: await readJson(req, 512 * 1024), file: null, files: {} };
 }
 
 function publicJob(row) {
   const params = JSON.parse(row.params_json);
+  const mediaType = row.media_type || params.mediaType || "image";
+  const slug = row.image_slug;
   return {
     id: row.id,
     status: row.status,
+    mediaType,
+    provider: row.provider || params.provider || (params.modelKey === "nano" ? "gemini" : "openai"),
     mode: row.mode,
     modelKey: row.model_key,
     prompt: params.prompt,
     params,
-    imageUrl: row.image_slug ? `/images/${row.image_slug}` : null,
+    imageUrl: mediaType === "image" && slug ? `/images/${slug}` : null,
+    videoUrl: mediaType === "video" && slug ? `/videos/${slug}` : null,
     errorMessage: row.error_message,
     createdAt: row.created_at,
     startedAt: row.started_at,
@@ -465,40 +580,71 @@ async function createJob(req, res) {
     throw httpError(429, "等待中的作品太多了，请等前面的完成后再提交。");
   }
 
-  const { fields, file } = await parseJobRequest(req);
+  const { fields, file, files } = await parseJobRequest(req);
   const params = normalizeJobParams(fields);
-  if (params.mode === "edit" && !file) throw httpError(400, "请先上传一张参考图片。");
-  if (file && !["image/png", "image/jpeg", "image/webp"].includes(file.mime)) {
-    throw httpError(400, "请上传 PNG、JPG 或 WebP 图片。");
+  const firstFrame = params.mediaType === "video" ? (files.firstFrame || null) : file;
+  const endFrame = params.mediaType === "video" ? (files.endFrame || null) : null;
+
+  if (params.mediaType === "image" && params.mode === "edit" && !firstFrame) {
+    throw httpError(400, "请先上传一张参考图片。");
   }
-  if (file && file.data.length > MAX_IMAGE_BYTES) {
-    throw httpError(413, "图片不能超过 50MB。");
+  if (params.mediaType === "video" && params.mode !== "text" && !firstFrame) {
+    throw httpError(400, "请先上传首帧图片。");
+  }
+  if (params.mediaType === "video" && params.mode === "first-last-frame" && !endFrame) {
+    throw httpError(400, "请先上传尾帧图片。");
+  }
+
+  for (const upload of [firstFrame, endFrame].filter(Boolean)) {
+    if (!["image/png", "image/jpeg", "image/webp"].includes(upload.mime)) {
+      throw httpError(400, "请上传 PNG、JPG 或 WebP 图片。");
+    }
+    if (upload.data.length > MAX_IMAGE_BYTES) {
+      throw httpError(413, "图片不能超过 50MB。");
+    }
   }
 
   const jobId = randomId(20);
   let sourcePath = null;
-  if (file) {
-    const ext = contentTypeToExtension(file.mime);
+  let sourceEndPath = null;
+  if (firstFrame) {
+    const ext = contentTypeToExtension(firstFrame.mime);
     sourcePath = path.join("sources", `${jobId}.${ext}`);
-    await writeImageFile(sourcePath, file.data);
+    if (params.mediaType === "video") {
+      await writeVideoFile(sourcePath, firstFrame.data);
+    } else {
+      await writeImageFile(sourcePath, firstFrame.data);
+    }
+  }
+  if (endFrame) {
+    const ext = contentTypeToExtension(endFrame.mime);
+    sourceEndPath = path.join("sources", `${jobId}-end.${ext}`);
+    await writeVideoFile(sourceEndPath, endFrame.data);
   }
 
   const timestamp = now();
   db.prepare(`
     INSERT INTO jobs (
-      id, user_id, status, mode, model_key, params_json,
-      source_image_path, source_image_name, source_image_mime, created_at
+      id, user_id, status, media_type, provider, mode, model_key, params_json,
+      source_image_path, source_image_name, source_image_mime,
+      source_end_image_path, source_end_image_name, source_end_image_mime,
+      created_at
     )
-    VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     jobId,
     session.id,
+    params.mediaType,
+    params.provider,
     params.mode,
     params.modelKey,
     JSON.stringify(params),
     sourcePath,
-    file?.filename || null,
-    file?.mime || null,
+    firstFrame?.filename || null,
+    firstFrame?.mime || null,
+    sourceEndPath,
+    endFrame?.filename || null,
+    endFrame?.mime || null,
     timestamp,
   );
 
@@ -525,10 +671,24 @@ async function writeImageFile(relativePath, buffer) {
   await writeFile(fullPath, buffer);
 }
 
+async function writeVideoFile(relativePath, buffer) {
+  const fullPath = safeVideoPath(relativePath);
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, buffer);
+}
+
 function safeImagePath(relativePath) {
   const fullPath = path.resolve(IMAGE_DIR, relativePath);
   if (!fullPath.startsWith(path.resolve(IMAGE_DIR) + path.sep)) {
     throw new Error("Invalid image path");
+  }
+  return fullPath;
+}
+
+function safeVideoPath(relativePath) {
+  const fullPath = path.resolve(VIDEO_DIR, relativePath);
+  if (!fullPath.startsWith(path.resolve(VIDEO_DIR) + path.sep)) {
+    throw new Error("Invalid video path");
   }
   return fullPath;
 }
@@ -538,7 +698,7 @@ async function handleImage(req, res, slug) {
   const row = db.prepare(`
     SELECT result_image_path, result_mime
     FROM jobs
-    WHERE image_slug = ? AND user_id = ? AND status = 'succeeded'
+    WHERE image_slug = ? AND user_id = ? AND status = 'succeeded' AND media_type = 'image'
   `).get(slug, session.id);
   if (!row?.result_image_path) throw httpError(404, "没有找到这张图片。");
 
@@ -550,6 +710,47 @@ async function handleImage(req, res, slug) {
     "Content-Type": row.result_mime || "image/png",
     "Content-Length": fileStat.size,
     "Cache-Control": "private, max-age=3600",
+  });
+  createReadStream(fullPath).pipe(res);
+}
+
+async function handleVideo(req, res, slug) {
+  const session = requireSession(req);
+  const row = db.prepare(`
+    SELECT COALESCE(result_media_path, result_image_path) AS result_path, result_mime
+    FROM jobs
+    WHERE image_slug = ? AND user_id = ? AND status = 'succeeded' AND media_type = 'video'
+  `).get(slug, session.id);
+  if (!row?.result_path) throw httpError(404, "没有找到这个视频。");
+
+  const fullPath = safeVideoPath(row.result_path);
+  const fileStat = await stat(fullPath).catch(() => null);
+  if (!fileStat?.isFile()) throw httpError(404, "视频文件不存在。");
+
+  const range = String(req.headers.range || "");
+  const rangeMatch = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (rangeMatch) {
+    const start = rangeMatch[1] ? Number(rangeMatch[1]) : 0;
+    const requestedEnd = rangeMatch[2] ? Number(rangeMatch[2]) : fileStat.size - 1;
+    const end = Math.min(requestedEnd, fileStat.size - 1);
+    if (Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end) {
+      res.writeHead(206, {
+        "Content-Type": row.result_mime || "video/mp4",
+        "Content-Length": end - start + 1,
+        "Content-Range": `bytes ${start}-${end}/${fileStat.size}`,
+        "Cache-Control": "private, max-age=3600",
+        "Accept-Ranges": "bytes",
+      });
+      createReadStream(fullPath, { start, end }).pipe(res);
+      return;
+    }
+  }
+
+  res.writeHead(200, {
+    "Content-Type": row.result_mime || "video/mp4",
+    "Content-Length": fileStat.size,
+    "Cache-Control": "private, max-age=3600",
+    "Accept-Ranges": "bytes",
   });
   createReadStream(fullPath).pipe(res);
 }
@@ -585,6 +786,76 @@ function parseGeminiImage(payload) {
   return null;
 }
 
+function compactLogText(value, limit = UPSTREAM_LOG_TEXT_LIMIT) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function contentToText(content) {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => part?.text || part?.input_text || part?.output_text || "").filter(Boolean).join(" ");
+  }
+  return content.text || content.input_text || content.output_text || "";
+}
+
+function readPayloadText(payload) {
+  const texts = [];
+  for (const candidate of payload?.candidates || []) {
+    const parts = candidate?.content?.parts || [];
+    for (const part of parts) {
+      if (part?.text) texts.push(part.text);
+    }
+  }
+  for (const choice of payload?.choices || []) {
+    texts.push(contentToText(choice?.message?.content));
+    texts.push(contentToText(choice?.delta?.content));
+    texts.push(choice?.text || "");
+  }
+  for (const output of payload?.output || []) {
+    texts.push(contentToText(output?.content));
+  }
+  return compactLogText(texts.filter(Boolean).join(" "));
+}
+
+function readUsageSummary(payload) {
+  const usage = payload?.usage || payload?.usageMetadata;
+  if (!usage || typeof usage !== "object") return null;
+  const summary = {};
+  for (const key of [
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "input_tokens",
+    "output_tokens",
+    "promptTokenCount",
+    "candidatesTokenCount",
+    "totalTokenCount",
+  ]) {
+    if (usage[key] !== undefined) summary[key] = usage[key];
+  }
+  return Object.keys(summary).length ? summary : null;
+}
+
+function summarizeMissingMediaPayload(payload) {
+  if (!payload || typeof payload !== "object") return { payloadType: payload === null ? "null" : typeof payload };
+  return {
+    topLevelKeys: Object.keys(payload).slice(0, 20),
+    usage: readUsageSummary(payload),
+    text: readPayloadText(payload),
+    finishReason: payload?.candidates?.[0]?.finishReason || payload?.choices?.[0]?.finish_reason || null,
+  };
+}
+
+function missingMediaError(mediaType, payload, provider) {
+  const error = new Error(mediaType === "video" ? MISSING_VIDEO_MESSAGE : MISSING_IMAGE_MESSAGE);
+  error.code = mediaType === "video" ? "UPSTREAM_MISSING_VIDEO" : "UPSTREAM_MISSING_IMAGE";
+  error.upstreamProvider = provider;
+  error.upstreamSummary = summarizeMissingMediaPayload(payload);
+  return error;
+}
+
 async function callImageModel(job, token) {
   const params = JSON.parse(job.params_json);
   if (params.modelKey === "nano") {
@@ -605,7 +876,7 @@ async function callImageModel(job, token) {
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(readUpstreamError(payload, response));
     const image = parseGeminiImage(payload);
-    if (!image?.b64) throw new Error("生成完成了，但没有收到可保存的图片。");
+    if (!image?.b64) throw missingMediaError("image", payload, "gemini");
     return { buffer: Buffer.from(image.b64, "base64"), mime: image.mime };
   }
 
@@ -630,7 +901,7 @@ async function callImageModel(job, token) {
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
-    return await parseOpenAiImageResponse(response, params.outputFormat);
+    return await parseOpenAiImageResponse(response, params.outputFormat, "openai-edits");
   }
 
   const body = {
@@ -653,10 +924,10 @@ async function callImageModel(job, token) {
     },
     body: JSON.stringify(body),
   });
-  return await parseOpenAiImageResponse(response, params.outputFormat);
+  return await parseOpenAiImageResponse(response, params.outputFormat, "openai-generations");
 }
 
-async function parseOpenAiImageResponse(response, outputFormat) {
+async function parseOpenAiImageResponse(response, outputFormat, provider) {
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(readUpstreamError(payload, response));
   const first = payload?.data?.[0];
@@ -674,7 +945,77 @@ async function parseOpenAiImageResponse(response, outputFormat) {
       mime: imageResponse.headers.get("content-type")?.split(";")[0] || "image/png",
     };
   }
-  throw new Error("生成完成了，但没有收到可保存的图片。");
+  throw missingMediaError("image", payload, provider);
+}
+
+async function callJimengVideoModel(job) {
+  if (!JIMENG_SESSION_ID) {
+    throw new Error("Jimeng sessionid 还没有配置，请先设置 JIMENG_SESSION_ID。");
+  }
+  const params = JSON.parse(job.params_json);
+  const headers = { Authorization: `Bearer ${JIMENG_SESSION_ID}` };
+  let body;
+
+  if (job.source_image_path) {
+    body = new FormData();
+    body.append("model", params.jimengModel || "jimeng-video-3.5-pro");
+    body.append("prompt", params.prompt);
+    body.append("duration", String(params.duration || "5"));
+    body.append("functionMode", params.functionMode || "first_last_frames");
+    body.append("response_format", params.responseFormat || "url");
+    if (params.ratio) body.append("ratio", params.ratio);
+    if (params.resolution) body.append("resolution", params.resolution);
+
+    const firstFrame = await readFile(safeVideoPath(job.source_image_path));
+    body.append("image_file_1", new Blob([firstFrame], { type: job.source_image_mime }), job.source_image_name || "first-frame.png");
+    if (job.source_end_image_path) {
+      const endFrame = await readFile(safeVideoPath(job.source_end_image_path));
+      body.append("image_file_2", new Blob([endFrame], { type: job.source_end_image_mime }), job.source_end_image_name || "end-frame.png");
+    }
+  } else {
+    headers["Content-Type"] = "application/json";
+    const payload = {
+      model: params.jimengModel || "jimeng-video-3.5-pro",
+      prompt: params.prompt,
+      duration: Number(params.duration || 5),
+      functionMode: params.functionMode || "first_last_frames",
+      response_format: params.responseFormat || "url",
+    };
+    if (params.ratio) payload.ratio = params.ratio;
+    if (params.resolution) payload.resolution = params.resolution;
+    body = JSON.stringify(payload);
+  }
+
+  const response = await fetchWithTimeout(`${JIMENG_API_BASE_URL}/v1/videos/generations`, {
+    method: "POST",
+    headers,
+    body,
+    timeoutMs: VIDEO_REQUEST_TIMEOUT_MS,
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(readUpstreamError(payload, response));
+
+  const video = parseJimengVideoResponse(payload);
+  if (video.b64) {
+    return { buffer: Buffer.from(video.b64, "base64"), mime: "video/mp4" };
+  }
+  if (video.url) {
+    const videoResponse = await fetchWithTimeout(video.url, { timeoutMs: VIDEO_REQUEST_TIMEOUT_MS });
+    if (!videoResponse.ok) throw new Error("视频已经生成，但下载保存失败。");
+    return {
+      buffer: Buffer.from(await videoResponse.arrayBuffer()),
+      mime: videoResponse.headers.get("content-type")?.split(";")[0] || "video/mp4",
+    };
+  }
+  throw missingMediaError("video", payload, "jimeng");
+}
+
+function parseJimengVideoResponse(payload) {
+  const first = payload?.data?.[0] || payload?.videos?.[0] || payload;
+  return {
+    url: first?.url || first?.video_url || first?.videoUrl || first?.content?.video_url || null,
+    b64: first?.b64_json || first?.b64Json || null,
+  };
 }
 
 function readUpstreamError(payload, response) {
@@ -725,23 +1066,38 @@ async function workerTick() {
 
 async function processJob(job) {
   try {
-    const token = decryptToken(job);
-    const image = await callImageModel(job, token);
-    const ext = contentTypeToExtension(image.mime);
+    const media = job.media_type === "video"
+      ? await callJimengVideoModel(job)
+      : await callImageModel(job, decryptToken(job));
+    const ext = contentTypeToExtension(media.mime, job.media_type === "video" ? "mp4" : "png");
     const slug = `${randomId(24)}.${ext}`;
     const relativePath = path.join("results", new Date().toISOString().slice(0, 10), slug);
-    await writeImageFile(relativePath, image.buffer);
+    if (job.media_type === "video") {
+      await writeVideoFile(relativePath, media.buffer);
+    } else {
+      await writeImageFile(relativePath, media.buffer);
+    }
     db.prepare(`
       UPDATE jobs
       SET status = 'succeeded',
           result_image_path = ?,
+          result_media_path = ?,
           result_mime = ?,
           image_slug = ?,
           finished_at = ?,
           error_message = NULL
       WHERE id = ?
-    `).run(relativePath, image.mime || extensionToMime(ext), slug, now(), job.id);
+    `).run(relativePath, relativePath, media.mime || extensionToMime(ext), slug, now(), job.id);
   } catch (error) {
+    if (error.code === "UPSTREAM_MISSING_IMAGE" || error.code === "UPSTREAM_MISSING_VIDEO") {
+      console.warn("[image-service] upstream returned no media", {
+        jobId: job.id,
+        mediaType: job.media_type || "image",
+        provider: error.upstreamProvider || job.provider || "unknown",
+        modelKey: job.model_key,
+        upstream: error.upstreamSummary,
+      });
+    }
     db.prepare(`
       UPDATE jobs
       SET status = 'failed', error_message = ?, finished_at = ?
@@ -812,6 +1168,8 @@ async function route(req, res) {
   if (jobMatch && req.method === "GET") return getJob(req, res, jobMatch[1]);
   const imageMatch = /^\/images\/([^/]+)$/.exec(pathname);
   if (imageMatch && req.method === "GET") return await handleImage(req, res, imageMatch[1]);
+  const videoMatch = /^\/videos\/([^/]+)$/.exec(pathname);
+  if (videoMatch && req.method === "GET") return await handleVideo(req, res, videoMatch[1]);
 
   sendError(res, 404, "Not found");
 }

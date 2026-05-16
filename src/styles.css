@@ -179,6 +179,7 @@ textarea:focus {
 
 .ghostBtn {
   padding: 0 14px;
+  white-space: nowrap;
 }
 
 .ghostIcon {
@@ -308,7 +309,7 @@ textarea:focus {
 
 .segmented {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 6px;
   padding: 5px;
   background: #eef5ef;
@@ -406,6 +407,21 @@ textarea:focus {
   box-shadow: inset 0 0 0 1px rgba(21, 144, 121, 0.2);
 }
 
+.singleModel {
+  display: grid;
+  place-items: center;
+}
+
+.videoFrameGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.frameUpload label {
+  min-height: 150px;
+}
+
 .sizePreview {
   color: #53665d;
   background: #f1f8f4;
@@ -416,6 +432,35 @@ textarea:focus {
 }
 
 .sizePreview strong {
+  color: #143f36;
+}
+
+.sizePreview span {
+  display: block;
+  margin-top: 4px;
+  color: #66756e;
+  font-size: 13px;
+}
+
+.readonlyField {
+  color: #43564d;
+  background: #fbfdfb;
+  border: 1px solid #dce8de;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.readonlyField {
+  display: grid;
+  gap: 6px;
+}
+
+.readonlyField span {
+  color: #2c3c35;
+  font-weight: 900;
+}
+
+.readonlyField strong {
   color: #143f36;
 }
 
@@ -553,6 +598,7 @@ textarea:focus {
 }
 
 .resultImage,
+.resultVideo,
 .waitingBox,
 .emptyPreview {
   width: 100%;
@@ -566,6 +612,12 @@ textarea:focus {
   max-height: 68vh;
   object-fit: contain;
   display: block;
+}
+
+.resultVideo {
+  max-height: 68vh;
+  display: block;
+  object-fit: contain;
 }
 
 .waitingBox,
@@ -714,17 +766,23 @@ textarea:focus {
   .topBar {
     align-items: center;
     margin-bottom: 16px;
+    gap: 12px;
   }
 
   .dashboardGrid,
   .twoCols,
+  .videoFrameGrid,
   .jobList {
     grid-template-columns: 1fr;
   }
 
   .topBar h1 {
     margin-bottom: 0;
-    font-size: 28px;
+    font-size: 26px;
+  }
+
+  .topBar > div {
+    min-width: 0;
   }
 
   .modelGrid {
@@ -764,9 +822,20 @@ textarea:focus {
   }
 
   .secondaryBtn,
-  .primaryBtn,
-  .ghostBtn {
+  .primaryBtn {
     width: 100%;
+  }
+
+  .ghostBtn {
+    width: auto;
+    min-height: 38px;
+    padding: 0 10px;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+
+  .jobList {
+    max-height: 430px;
   }
 
   .rangeBlock {

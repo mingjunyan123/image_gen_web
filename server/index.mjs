@@ -390,8 +390,16 @@ const SORA2_VIDEO_MODELS = new Set([
   "sora2-portrait-25s",
 ]);
 
+const SORA2_VIDEO_MODEL_ALIASES = {
+  "sora-video-landscape-10s": "sora2-landscape-10s",
+  "sora-video-landscape-15s": "sora2-landscape-15s",
+  "sora-video-portrait-10s": "sora2-portrait-10s",
+  "sora-video-portrait-15s": "sora2-portrait-15s",
+};
+
 function safeSora2VideoModel(value) {
-  return SORA2_VIDEO_MODELS.has(value) ? value : "sora2-landscape-10s";
+  const normalized = SORA2_VIDEO_MODEL_ALIASES[value] || value;
+  return SORA2_VIDEO_MODELS.has(normalized) ? normalized : "sora2-landscape-10s";
 }
 
 const GPT_MAX_LONG_SIDE = 3840;
@@ -970,18 +978,21 @@ async function parseOpenAiImageResponse(response, outputFormat, provider) {
 
 async function callSora2VideoModel(job) {
   const params = JSON.parse(job.params_json);
-  const content = [{ type: "text", text: params.prompt }];
+  let content = params.prompt;
   if (job.source_image_path) {
     const firstFrame = await readFile(safeVideoPath(job.source_image_path));
-    content.push({
-      type: "image_url",
-      image_url: {
-        url: `data:${job.source_image_mime || "image/png"};base64,${firstFrame.toString("base64")}`,
+    content = [
+      { type: "text", text: params.prompt },
+      {
+        type: "image_url",
+        image_url: {
+          url: `data:${job.source_image_mime || "image/png"};base64,${firstFrame.toString("base64")}`,
+        },
       },
-    });
+    ];
   }
   const body = {
-    model: params.sora2Model || "sora2-landscape-10s",
+    model: safeSora2VideoModel(params.sora2Model || "sora2-landscape-10s"),
     stream: true,
     messages: [
       {
@@ -990,6 +1001,14 @@ async function callSora2VideoModel(job) {
       },
     ],
   };
+
+  console.log("[image-service] requesting sora2 video", {
+    jobId: job.id,
+    baseUrl: SORA2_API_BASE_URL,
+    model: body.model,
+    mode: params.mode,
+    hasFirstFrame: Boolean(job.source_image_path),
+  });
 
   const response = await fetchWithTimeout(`${SORA2_API_BASE_URL}/v1/chat/completions`, {
     method: "POST",
@@ -1154,6 +1173,14 @@ async function processJob(job) {
         upstreamContentType: error.upstreamContentType,
         upstream: error.upstreamSummary,
         upstreamRawBody: error.upstreamRawBody,
+      });
+    } else {
+      console.error("[image-service] job failed", {
+        jobId: job.id,
+        mediaType: job.media_type || "image",
+        provider: job.provider || "unknown",
+        modelKey: job.model_key,
+        error: error.message,
       });
     }
     db.prepare(`

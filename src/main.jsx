@@ -247,6 +247,7 @@ function makePreviewJob({ mediaType, mode, modelKey, prompt, params }) {
 function App() {
   const [checkingSession, setCheckingSession] = useState(!LOCAL_PREVIEW);
   const [authenticated, setAuthenticated] = useState(LOCAL_PREVIEW);
+  const [videoEnabled, setVideoEnabled] = useState(LOCAL_PREVIEW);
   const [loginToken, setLoginToken] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
@@ -306,6 +307,12 @@ function App() {
     return () => window.clearInterval(timer);
   }, [authenticated]);
 
+  useEffect(() => {
+    if (videoEnabled || mediaType !== MEDIA_TYPES.VIDEO) return;
+    setMediaType(MEDIA_TYPES.IMAGE);
+    clearVideoFrames();
+  }, [videoEnabled, mediaType]);
+
   useEffect(() => () => {
     if (sourcePreview) URL.revokeObjectURL(sourcePreview);
   }, [sourcePreview]);
@@ -335,8 +342,10 @@ function App() {
     try {
       const payload = await api("/image-api/auth/session");
       setAuthenticated(Boolean(payload.authenticated));
+      setVideoEnabled(Boolean(payload.videoEnabled));
     } catch {
       setAuthenticated(false);
+      setVideoEnabled(false);
     } finally {
       setCheckingSession(false);
     }
@@ -347,12 +356,13 @@ function App() {
     setLoginError("");
     setLoginLoading(true);
     try {
-      await api("/image-api/auth/login", {
+      const payload = await api("/image-api/auth/login", {
         method: "POST",
         body: JSON.stringify({ token: loginToken }),
       });
       setLoginToken("");
       setAuthenticated(true);
+      setVideoEnabled(Boolean(payload.videoEnabled));
       await refreshJobs(true);
     } catch (error) {
       setLoginError(error.message);
@@ -369,6 +379,7 @@ function App() {
     }
     await api("/image-api/auth/logout", { method: "POST", body: JSON.stringify({}) }).catch(() => {});
     setAuthenticated(false);
+    setVideoEnabled(false);
     setJobs([]);
     setSelectedJobId(null);
   }
@@ -652,21 +663,43 @@ function App() {
 
       <section className="dashboardGrid">
         <form className="controlPanel" onSubmit={submitJob}>
-          <Segmented
-            value={mode}
-            onChange={switchMode}
-            options={[
-              { value: "generate", label: "文生图", icon: Sparkles },
-              { value: "edit", label: "图生图", icon: PencilLine },
-            ]}
-          />
+          {videoEnabled ? (
+            <Segmented
+              value={mediaType}
+              onChange={switchMediaType}
+              options={[
+                { value: MEDIA_TYPES.IMAGE, label: "图片", icon: ImageIcon },
+                { value: MEDIA_TYPES.VIDEO, label: "视频", icon: Video },
+              ]}
+            />
+          ) : null}
+
+          {mediaType === MEDIA_TYPES.IMAGE ? (
+            <Segmented
+              value={mode}
+              onChange={switchMode}
+              options={[
+                { value: "generate", label: "文生图", icon: Sparkles },
+                { value: "edit", label: "图生图", icon: PencilLine },
+              ]}
+            />
+          ) : (
+            <Segmented
+              value={videoMode}
+              onChange={setVideoMode}
+              options={[
+                { value: VIDEO_MODES.TEXT, label: "文生视频", icon: Sparkles },
+                { value: VIDEO_MODES.FIRST_FRAME, label: "首帧生视频", icon: ImageIcon },
+              ]}
+            />
+          )}
 
           <label className="fieldBlock">
             <span>画面描述</span>
             <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} />
           </label>
 
-          {mode === "edit" ? (
+          {mediaType === MEDIA_TYPES.IMAGE && mode === "edit" ? (
             <div className="uploadBox">
               <label>
                 <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => updateSourceImage(event.target.files?.[0])} />
@@ -676,77 +709,93 @@ function App() {
             </div>
           ) : null}
 
-          <div className="modelGrid">
-            {modelOptions.map((model) => (
-              <button
-                key={model.value}
-                type="button"
-                className={modelKey === model.value ? "modelChoice active" : "modelChoice"}
-                onClick={() => setModelKey(model.value)}
-              >
-                <strong>{model.name}</strong>
-              </button>
-            ))}
-          </div>
-
-          {modelKey === MODEL_KEYS.GPT ? (
+          {mediaType === MEDIA_TYPES.VIDEO ? (
             <>
-              <Segmented
-                value={gptResolutionMode}
-                onChange={setGptResolutionMode}
-                options={[
-                  { value: GPT_RESOLUTION_MODES.PRESET, label: "预设分辨率" },
-                  { value: GPT_RESOLUTION_MODES.CUSTOM, label: "自定义分辨率" },
-                ]}
-              />
-              {gptResolutionMode === GPT_RESOLUTION_MODES.PRESET ? (
-                <div className="twoCols">
-                  <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
-                  <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
-                </div>
-              ) : (
-                <div className="customSizeBlock">
-                  <div className="dimensionRow">
-                    <label className="fieldBlock">
-                      <span>宽</span>
-                      <input value={gptCustomWidth} inputMode="numeric" onChange={(event) => setGptCustomWidth(event.target.value)} />
-                    </label>
-                    <span className="dimensionDivider">X</span>
-                    <label className="fieldBlock">
-                      <span>高</span>
-                      <input value={gptCustomHeight} inputMode="numeric" onChange={(event) => setGptCustomHeight(event.target.value)} />
-                    </label>
-                  </div>
-                  {sourceImageSize ? (
-                    <p className="helperText">已读取上传图片：{sourceImageSize.width} x {sourceImageSize.height}</p>
-                  ) : null}
-                  {gptSizeError ? <p className="fieldError">{gptSizeError}</p> : null}
-                </div>
-              )}
-              <div className="sizePreview">
-                图片分辨率：<strong>{readableGptSize}</strong>
-              </div>
-              {showGptExperimentalWarning ? <div className="warningBox">{GPT_EXPERIMENTAL_MESSAGE}</div> : null}
-              <div className="twoCols">
-                <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
-                <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
-              </div>
-              {outputFormat !== "png" ? (
-                <label className="rangeBlock">
-                  <span>压缩程度</span>
-                  <input type="range" min="0" max="100" value={outputCompression} onChange={(event) => setOutputCompression(Number(event.target.value))} />
-                  <b>{outputCompression}%</b>
-                </label>
+              <SelectField label="视频模型" value={videoModel} onChange={setVideoModel} options={sora2VideoModelOptions} />
+              {videoMode !== VIDEO_MODES.TEXT ? (
+                <FrameUpload
+                  label="上传首帧图片"
+                  preview={firstFramePreview}
+                  onChange={(file) => updateVideoFrame("first", file)}
+                  onClear={clearFirstFrame}
+                />
               ) : null}
             </>
           ) : (
-            <div className="twoCols">
-              <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />
-              <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
-            </div>
+            <>
+              <div className="modelGrid">
+                {modelOptions.map((model) => (
+                  <button
+                    key={model.value}
+                    type="button"
+                    className={modelKey === model.value ? "modelChoice active" : "modelChoice"}
+                    onClick={() => setModelKey(model.value)}
+                  >
+                    <strong>{model.name}</strong>
+                  </button>
+                ))}
+              </div>
+
+              {modelKey === MODEL_KEYS.GPT ? (
+                <>
+                  <Segmented
+                    value={gptResolutionMode}
+                    onChange={setGptResolutionMode}
+                    options={[
+                      { value: GPT_RESOLUTION_MODES.PRESET, label: "预设分辨率" },
+                      { value: GPT_RESOLUTION_MODES.CUSTOM, label: "自定义分辨率" },
+                    ]}
+                  />
+                  {gptResolutionMode === GPT_RESOLUTION_MODES.PRESET ? (
+                    <div className="twoCols">
+                      <SelectField label="画面比例" value={gptAspectRatio} onChange={setGptAspectRatio} options={gptAspectOptions} />
+                      <SelectField label="清晰度" value={gptResolution} onChange={setGptResolution} options={gptResolutionOptions} />
+                    </div>
+                  ) : (
+                    <div className="customSizeBlock">
+                      <div className="dimensionRow">
+                        <label className="fieldBlock">
+                          <span>宽</span>
+                          <input value={gptCustomWidth} inputMode="numeric" onChange={(event) => setGptCustomWidth(event.target.value)} />
+                        </label>
+                        <span className="dimensionDivider">X</span>
+                        <label className="fieldBlock">
+                          <span>高</span>
+                          <input value={gptCustomHeight} inputMode="numeric" onChange={(event) => setGptCustomHeight(event.target.value)} />
+                        </label>
+                      </div>
+                      {sourceImageSize ? (
+                        <p className="helperText">已读取上传图片：{sourceImageSize.width} x {sourceImageSize.height}</p>
+                      ) : null}
+                      {gptSizeError ? <p className="fieldError">{gptSizeError}</p> : null}
+                    </div>
+                  )}
+                  <div className="sizePreview">
+                    图片分辨率：<strong>{readableGptSize}</strong>
+                  </div>
+                  {showGptExperimentalWarning ? <div className="warningBox">{GPT_EXPERIMENTAL_MESSAGE}</div> : null}
+                  <div className="twoCols">
+                    <SelectField label="画面质量" value={quality} onChange={setQuality} options={qualityOptions} />
+                    <SelectField label="图片格式" value={outputFormat} onChange={setOutputFormat} options={formatOptions} />
+                  </div>
+                  {outputFormat !== "png" ? (
+                    <label className="rangeBlock">
+                      <span>压缩程度</span>
+                      <input type="range" min="0" max="100" value={outputCompression} onChange={(event) => setOutputCompression(Number(event.target.value))} />
+                      <b>{outputCompression}%</b>
+                    </label>
+                  ) : null}
+                </>
+              ) : (
+                <div className="twoCols">
+                  <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />
+                  <SelectField label="清晰度" value={resolution} onChange={setResolution} options={resolutionOptions} />
+                </div>
+              )}
+            </>
           )}
 
-          <button className="primaryBtn submitBtn" disabled={submitting || Boolean(gptSizeError)}>
+          <button className="primaryBtn submitBtn" disabled={submitting || (mediaType === MEDIA_TYPES.IMAGE && Boolean(gptSizeError))}>
             {submitting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
             {submitting ? "正在提交" : "开始生成"}
           </button>

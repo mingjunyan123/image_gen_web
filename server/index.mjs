@@ -19,6 +19,15 @@ const VIDEO_DIR = path.join(DATA_DIR, "videos");
 const NEW_API_BASE_URL = (process.env.NEW_API_BASE_URL || "http://new-api:3000").replace(/\/+$/, "");
 const SORA2_API_BASE_URL = (process.env.SORA2_API_BASE_URL || "http://sora2api:8000").replace(/\/+$/, "");
 const SORA2_API_KEY = cleanToken(process.env.SORA2_API_KEY || "han1234");
+const DEFAULT_VIDEO_ALLOWED_TOKENS = ["sk-QE6tvrIOmUYTb03aHLjOgVqlbKty8VwlJHDWtH1gaSEC7f94"];
+const VIDEO_ALLOWED_TOKENS = String(process.env.VIDEO_ALLOWED_TOKENS || DEFAULT_VIDEO_ALLOWED_TOKENS.join(","))
+  .split(",")
+  .map(cleanToken)
+  .filter(Boolean);
+const VIDEO_ALLOWED_TOKEN_HASHES_CONFIG = String(process.env.VIDEO_ALLOWED_TOKEN_HASHES || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 const SERVICE_SECRET = process.env.IMAGE_SERVICE_SECRET || "change-me-image-service-secret";
 const TOKEN_PEPPER = process.env.IMAGE_TOKEN_PEPPER || SERVICE_SECRET;
 const SESSION_DAYS = Number(process.env.IMAGE_SESSION_DAYS || 7);
@@ -135,6 +144,19 @@ function randomId(bytes = 18) {
 
 function hashToken(token) {
   return createHash("sha256").update(TOKEN_PEPPER).update(token).digest("hex");
+}
+
+const VIDEO_ALLOWED_TOKEN_HASHES = new Set([
+  ...VIDEO_ALLOWED_TOKEN_HASHES_CONFIG,
+  ...VIDEO_ALLOWED_TOKENS.map(hashToken),
+]);
+
+function isVideoAllowedTokenHash(tokenHash) {
+  return VIDEO_ALLOWED_TOKEN_HASHES.has(tokenHash);
+}
+
+function canUseVideo(session) {
+  return isVideoAllowedTokenHash(session?.token_hash);
 }
 
 function encryptionKey() {
@@ -305,13 +327,17 @@ async function handleLogin(req, res) {
   db.prepare("INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
     .run(sessionId, userId, expiresAt, timestamp);
 
-  sendJson(res, 200, { authenticated: true }, { "Set-Cookie": makeSessionCookie(req, sessionId, expiresAt) });
+  sendJson(res, 200, {
+    authenticated: true,
+    videoEnabled: isVideoAllowedTokenHash(tokenHash),
+  }, { "Set-Cookie": makeSessionCookie(req, sessionId, expiresAt) });
 }
 
 function handleSession(req, res) {
   const session = getSession(req);
   sendJson(res, 200, {
     authenticated: Boolean(session),
+    videoEnabled: canUseVideo(session),
     limits: {
       maxQueued: MAX_TOKEN_QUEUED,
       maxActive: MAX_TOKEN_PROCESSING,
@@ -539,6 +565,9 @@ async function createJob(req, res) {
 
   const { fields, file, files } = await parseJobRequest(req);
   const params = normalizeJobParams(fields);
+  if (params.mediaType === "video" && !canUseVideo(session)) {
+    throw httpError(403, "当前访问密钥暂未开通视频生成。");
+  }
   const firstFrame = params.mediaType === "video" ? (files.firstFrame || null) : file;
 
   if (params.mediaType === "image" && params.mode === "edit" && !firstFrame) {

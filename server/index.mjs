@@ -33,6 +33,7 @@ const SESSION_COOKIE = "image_session";
 const MISSING_IMAGE_MESSAGE = "上游模型这次没有返回图片，只返回了文字或空结果。请稍后重试；如果连续出现，请调整提示词或换一个模型。";
 const MISSING_VIDEO_MESSAGE = "上游模型这次没有返回视频，只返回了文字或空结果。请稍后重试；如果连续出现，请调整提示词或换一个模型。";
 const UPSTREAM_LOG_TEXT_LIMIT = 500;
+const UPSTREAM_RAW_BODY_LOG_LIMIT = Number(process.env.IMAGE_UPSTREAM_RAW_BODY_LOG_LIMIT || 20000);
 
 if (!process.env.IMAGE_SERVICE_SECRET) {
   console.warn("[image-service] IMAGE_SERVICE_SECRET is not set. Set a long random value before production use.");
@@ -733,6 +734,24 @@ function compactLogText(value, limit = UPSTREAM_LOG_TEXT_LIMIT) {
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 
+function truncateRawLogBody(value, limit = UPSTREAM_RAW_BODY_LOG_LIMIT) {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]`;
+}
+
+async function readJsonResponse(response) {
+  const rawBody = await response.text().catch((error) => `[failed to read response body: ${error.message}]`);
+  let payload = null;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    payload = null;
+  }
+  return { payload, rawBody };
+}
+
 function contentToText(content) {
   if (!content) return "";
   if (typeof content === "string") return content;
@@ -807,11 +826,14 @@ function summarizePayloadData(data) {
   };
 }
 
-function missingMediaError(mediaType, payload, provider) {
+function missingMediaError(mediaType, payload, provider, upstreamResponse = {}) {
   const error = new Error(mediaType === "video" ? MISSING_VIDEO_MESSAGE : MISSING_IMAGE_MESSAGE);
   error.code = mediaType === "video" ? "UPSTREAM_MISSING_VIDEO" : "UPSTREAM_MISSING_IMAGE";
   error.upstreamProvider = provider;
   error.upstreamSummary = summarizeMissingMediaPayload(payload);
+  error.upstreamStatus = upstreamResponse.status ?? null;
+  error.upstreamContentType = upstreamResponse.contentType ?? null;
+  error.upstreamRawBody = truncateRawLogBody(upstreamResponse.rawBody);
   return error;
 }
 
@@ -832,10 +854,16 @@ async function callImageModel(job, token) {
       },
       body: JSON.stringify(buildGeminiBody(params, imagePart)),
     });
-    const payload = await response.json().catch(() => null);
+    const { payload, rawBody } = await readJsonResponse(response);
     if (!response.ok) throw new Error(readUpstreamError(payload, response));
     const image = parseGeminiImage(payload);
-    if (!image?.b64) throw missingMediaError("image", payload, "gemini");
+    if (!image?.b64) {
+      throw missingMediaError("image", payload, "gemini", {
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+        rawBody,
+      });
+    }
     return { buffer: Buffer.from(image.b64, "base64"), mime: image.mime };
   }
 
@@ -887,7 +915,7 @@ async function callImageModel(job, token) {
 }
 
 async function parseOpenAiImageResponse(response, outputFormat, provider) {
-  const payload = await response.json().catch(() => null);
+  const { payload, rawBody } = await readJsonResponse(response);
   if (!response.ok) throw new Error(readUpstreamError(payload, response));
   const first = payload?.data?.[0];
   if (first?.b64_json) {
@@ -904,7 +932,11 @@ async function parseOpenAiImageResponse(response, outputFormat, provider) {
       mime: imageResponse.headers.get("content-type")?.split(";")[0] || "image/png",
     };
   }
-  throw missingMediaError("image", payload, provider);
+  throw missingMediaError("image", payload, provider, {
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    rawBody,
+  });
 }
 
 async function callSora2VideoModel(job) {
@@ -944,7 +976,7 @@ async function callSora2VideoModel(job) {
     throw new Error(readUpstreamError(payload, response));
   }
 
-  const text = await readSseText(response);
+  const { text, rawBody } = await readSseText(response);
   const video = parseSora2VideoResponse(text);
   if (video.url) {
     const videoResponse = await fetchWithTimeout(video.url, { timeoutMs: VIDEO_REQUEST_TIMEOUT_MS });
@@ -954,7 +986,11 @@ async function callSora2VideoModel(job) {
       mime: videoResponse.headers.get("content-type")?.split(";")[0] || "video/mp4",
     };
   }
-  throw missingMediaError("video", { text }, "sora2");
+  throw missingMediaError("video", { text }, "sora2", {
+    status: response.status,
+    contentType: response.headers.get("content-type"),
+    rawBody,
+  });
 }
 
 async function readSseText(response) {
@@ -976,7 +1012,7 @@ async function readSseText(response) {
     if (delta) chunks.push(delta);
     if (message) chunks.push(message);
   }
-  return chunks.join("");
+  return { text: chunks.join(""), rawBody: raw };
 }
 
 function parseSora2VideoResponse(text) {
@@ -1085,7 +1121,10 @@ async function processJob(job) {
         mediaType: job.media_type || "image",
         provider: error.upstreamProvider || job.provider || "unknown",
         modelKey: job.model_key,
+        upstreamStatus: error.upstreamStatus,
+        upstreamContentType: error.upstreamContentType,
         upstream: error.upstreamSummary,
+        upstreamRawBody: error.upstreamRawBody,
       });
     }
     db.prepare(`

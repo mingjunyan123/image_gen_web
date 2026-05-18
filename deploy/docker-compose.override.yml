@@ -40,7 +40,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./api.domaeng.com.conf:/etc/nginx/conf.d/api.domaeng.com.conf:ro
+      - ./nginx/conf.d/api.domaeng.com.conf:/etc/nginx/conf.d/api.domaeng.com.conf:ro
       - ./certbot/www:/var/www/certbot
       - ./certbot/conf:/etc/letsencrypt
       - ./static:/usr/share/nginx/html/static:ro

@@ -54,12 +54,13 @@ Deployment files now live in `deploy/`:
 
 - `deploy/docker-compose.yml` is the base server Compose file for New-API, CLIProxyAPI, and chatgpt2api.
 - `deploy/docker-compose.override.yml` adds image-service and nginx on top of the base Compose file.
-- `deploy/api.domaeng.com.conf` is the canonical nginx config mounted by the Compose file.
+- `deploy/api.domaeng.com.conf` is the source nginx config; copy it to `/opt/ai-gateway/nginx/conf.d/api.domaeng.com.conf` before restarting nginx.
 - `deploy/.env.example` lists optional queue tuning variables that can be copied to `deploy/.env` on the server.
 
 Run from the `deploy/` directory on the server:
 
 ```bash
+cp /opt/image-web/deploy/api.domaeng.com.conf /opt/ai-gateway/nginx/conf.d/api.domaeng.com.conf
 cd /opt/ai-gateway
 docker compose up -d --build
 ```

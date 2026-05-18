@@ -60,7 +60,7 @@ Deployment files now live in `deploy/`:
 Run from the `deploy/` directory on the server:
 
 ```bash
-cd /opt/image-web/deploy
+cd /opt/ai-gateway
 docker compose up -d --build
 ```
 
@@ -73,7 +73,7 @@ node --experimental-sqlite server/index.mjs
 Required persistent volume:
 
 ```text
-../image-service-data:/data/image-service
+./image-service-data:/data/image-service
 ```
 
 Important environment variables:
@@ -105,7 +105,7 @@ docker exec image-service node --experimental-sqlite scripts/backup.mjs
 Backups are written to:
 
 ```text
-../image-service-data/backups/
+./image-service-data/backups/
 ```
 
 The backup includes:

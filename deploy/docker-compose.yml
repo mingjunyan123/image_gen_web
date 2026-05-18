@@ -13,8 +13,8 @@ services:
       RELAY_TIMEOUT: "600"
       BATCH_UPDATE_ENABLED: "false"
     volumes:
-      - ../new-api-data:/data
-      - ../new-api-logs:/app/logs
+      - ./new-api-data:/data
+      - ./new-api-logs:/app/logs
     expose:
       - "3000"
     networks:
@@ -27,9 +27,9 @@ services:
     environment:
       TZ: Asia/Singapore
     volumes:
-      - ../cliproxyapi/config.yaml:/CLIProxyAPI/config.yaml
-      - ../cliproxyapi/auths:/root/.cli-proxy-api
-      - ../cliproxyapi/logs:/CLIProxyAPI/logs
+      - ./cliproxyapi/config.yaml:/CLIProxyAPI/config.yaml
+      - ./cliproxyapi/auths:/root/.cli-proxy-api
+      - ./cliproxyapi/logs:/CLIProxyAPI/logs
     expose:
       - "8317"
     ports:
@@ -45,8 +45,8 @@ services:
       TZ: Asia/Singapore
       STORAGE_BACKEND: json
     volumes:
-      - ../chatgpt2api-data:/app/data
-      - ../chatgpt2api/config.json:/app/config.json
+      - ./chatgpt2api-data:/app/data
+      - ./chatgpt2api/config.json:/app/config.json
     expose:
       - "80"
     ports:

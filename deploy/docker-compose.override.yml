@@ -1,7 +1,7 @@
 services:
   image-service:
     build:
-      context: ..
+      context: "${IMAGE_WEB_BUILD_CONTEXT:-/opt/image-web}"
       dockerfile: Dockerfile
     container_name: image-service
     restart: always
@@ -20,7 +20,7 @@ services:
       IMAGE_MAX_UPLOAD_BYTES: "52428800"
       IMAGE_VIDEO_FEATURE_ENABLED: "false"
     volumes:
-      - ../image-service-data:/data/image-service
+      - ./image-service-data:/data/image-service
     expose:
       - "3000"
     depends_on:
@@ -41,8 +41,8 @@ services:
       - "443:443"
     volumes:
       - ./api.domaeng.com.conf:/etc/nginx/conf.d/api.domaeng.com.conf:ro
-      - ../certbot/www:/var/www/certbot
-      - ../certbot/conf:/etc/letsencrypt
-      - ../static:/usr/share/nginx/html/static:ro
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+      - ./static:/usr/share/nginx/html/static:ro
     networks:
       - ai-gateway

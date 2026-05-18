@@ -6,12 +6,12 @@ services:
     command: --log-dir /app/logs
     environment:
       TZ: Asia/Singapore
-      SESSION_SECRET: "${NEW_API_SESSION_SECRET:-dxqHdcY0zbOC8dPqqsyHw9RVXIobhcig5fkdRChp57Q84svOldTAT5d1eK5EpE5m}"
-      CRYPTO_SECRET: "${NEW_API_CRYPTO_SECRET:-CRe6uym99Ognok64OCNrlKC1NPcm9x8g5pn6OAHhaLPXnnxNGAfY26xv7TWjXRqg}"
-      FRONTEND_BASE_URL: "${NEW_API_FRONTEND_BASE_URL:-https://domaeng.com}"
-      STREAMING_TIMEOUT: "${NEW_API_STREAMING_TIMEOUT:-600}"
-      RELAY_TIMEOUT: "${NEW_API_RELAY_TIMEOUT:-600}"
-      BATCH_UPDATE_ENABLED: "${NEW_API_BATCH_UPDATE_ENABLED:-false}"
+      SESSION_SECRET: "dxqHdcY0zbOC8dPqqsyHw9RVXIobhcig5fkdRChp57Q84svOldTAT5d1eK5EpE5m"
+      CRYPTO_SECRET: "CRe6uym99Ognok64OCNrlKC1NPcm9x8g5pn6OAHhaLPXnnxNGAfY26xv7TWjXRqg"
+      FRONTEND_BASE_URL: "https://domaeng.com"
+      STREAMING_TIMEOUT: "600"
+      RELAY_TIMEOUT: "600"
+      BATCH_UPDATE_ENABLED: "false"
     volumes:
       - ../new-api-data:/data
       - ../new-api-logs:/app/logs

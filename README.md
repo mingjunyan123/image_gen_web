@@ -55,7 +55,7 @@ Deployment files now live in `deploy/`:
 - `deploy/docker-compose.yml` is the base server Compose file for New-API, CLIProxyAPI, and chatgpt2api.
 - `deploy/docker-compose.override.yml` adds image-service and nginx on top of the base Compose file.
 - `deploy/api.domaeng.com.conf` is the canonical nginx config mounted by the Compose file.
-- `deploy/.env.example` lists the environment variables that can be copied to `deploy/.env` on the server.
+- `deploy/.env.example` lists optional queue tuning variables that can be copied to `deploy/.env` on the server.
 
 Run from the `deploy/` directory on the server:
 
@@ -78,20 +78,11 @@ Required persistent volume:
 
 Important environment variables:
 
-- `NEW_API_BASE_URL=http://new-api:3000`
-- `IMAGE_DATA_DIR=/data/image-service`
-- `IMAGE_SERVICE_SECRET=<set-a-long-random-secret>`
 - `IMAGE_MAX_GLOBAL_PROCESSING=1`
 - `IMAGE_MAX_TOKEN_PROCESSING=1`
 - `IMAGE_MAX_TOKEN_QUEUED=5`
-- `IMAGE_WORKER_INTERVAL_MS=1500`
-- `IMAGE_REQUEST_TIMEOUT_MS=600000`
-- `IMAGE_MAX_UPLOAD_BYTES=52428800`
-- `IMAGE_VIDEO_FEATURE_ENABLED=false`
-- `VIDEO_ALLOWED_TOKENS=<comma-separated tokens>` optionally limits the future video UI to specific tokens after `IMAGE_VIDEO_FEATURE_ENABLED=true`.
-- `VIDEO_ALLOWED_TOKEN_HASHES=<comma-separated token hashes>` is the hashed-token equivalent of `VIDEO_ALLOWED_TOKENS`.
 
-`IMAGE_SERVICE_SECRET` protects saved user tokens. Set it once and keep it stable. If it changes, previously saved encrypted tokens cannot be used by unfinished jobs.
+`IMAGE_SERVICE_SECRET` is currently set directly in `deploy/docker-compose.override.yml`. It protects saved user tokens. Set it once and keep it stable. If it changes, previously saved encrypted tokens cannot be used by unfinished jobs.
 
 For Docker Compose deployments, the image-service queue and upload settings are read from environment variables, so changing concurrency normally only requires editing `deploy/.env` and recreating the container, not changing source code. Video UI code is intentionally kept in the frontend but disabled by default, and the backend currently rejects new video generation jobs until a new provider is added.
 

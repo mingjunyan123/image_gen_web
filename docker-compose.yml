@@ -49,19 +49,6 @@ services:
     networks:
       - ai-gateway
 
-  sora2api:
-    image: thesmallhancat/sora2api:latest
-    container_name: sora2api
-    restart: always
-    environment:
-      TZ: Asia/Singapore
-    expose:
-      - "8000"
-    volumes:
-      - ./sora2api-data:/app/data
-    networks:
-      - ai-gateway
-
   nginx:
     image: nginx:stable
     container_name: nginx
@@ -70,7 +57,6 @@ services:
       - new-api
       - cliproxyapi
       - image-service
-      - sora2api
     ports:
       - "80:80"
       - "443:443"

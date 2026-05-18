@@ -17,10 +17,8 @@ const DB_PATH = path.join(DATA_DIR, "app.db");
 const IMAGE_DIR = path.join(DATA_DIR, "images");
 const VIDEO_DIR = path.join(DATA_DIR, "videos");
 const NEW_API_BASE_URL = (process.env.NEW_API_BASE_URL || "http://new-api:3000").replace(/\/+$/, "");
-const SORA2_API_BASE_URL = (process.env.SORA2_API_BASE_URL || "http://sora2api:8000").replace(/\/+$/, "");
-const SORA2_API_KEY = cleanToken(process.env.SORA2_API_KEY || "han1234");
-const DEFAULT_VIDEO_ALLOWED_TOKENS = ["sk-QE6tvrIOmUYTb03aHLjOgVqlbKty8VwlJHDWtH1gaSEC7f94"];
-const VIDEO_ALLOWED_TOKENS = String(process.env.VIDEO_ALLOWED_TOKENS || DEFAULT_VIDEO_ALLOWED_TOKENS.join(","))
+const VIDEO_FEATURE_ENABLED = parseBoolean(process.env.IMAGE_VIDEO_FEATURE_ENABLED);
+const VIDEO_ALLOWED_TOKENS = String(process.env.VIDEO_ALLOWED_TOKENS || "")
   .split(",")
   .map(cleanToken)
   .filter(Boolean);
@@ -36,7 +34,6 @@ const MAX_TOKEN_PROCESSING = Number(process.env.IMAGE_MAX_TOKEN_PROCESSING || 1)
 const MAX_TOKEN_QUEUED = Number(process.env.IMAGE_MAX_TOKEN_QUEUED || 5);
 const WORKER_INTERVAL_MS = Number(process.env.IMAGE_WORKER_INTERVAL_MS || 1500);
 const REQUEST_TIMEOUT_MS = Number(process.env.IMAGE_REQUEST_TIMEOUT_MS || 600000);
-const VIDEO_REQUEST_TIMEOUT_MS = Number(process.env.VIDEO_REQUEST_TIMEOUT_MS || 2400000);
 const MAX_IMAGE_BYTES = Number(process.env.IMAGE_MAX_UPLOAD_BYTES || 50 * 1024 * 1024);
 const SESSION_COOKIE = "image_session";
 const MISSING_IMAGE_MESSAGE = "上游模型这次没有返回图片，只返回了文字或空结果。请稍后重试；如果连续出现，请调整提示词或换一个模型。";
@@ -156,6 +153,8 @@ function isVideoAllowedTokenHash(tokenHash) {
 }
 
 function canUseVideo(session) {
+  if (!VIDEO_FEATURE_ENABLED) return false;
+  if (!VIDEO_ALLOWED_TOKEN_HASHES.size) return true;
   return isVideoAllowedTokenHash(session?.token_hash);
 }
 
@@ -185,6 +184,10 @@ function decryptToken(user) {
 
 function cleanToken(value) {
   return String(value || "").trim().replace(/^Bearer\s+/i, "");
+}
+
+function parseBoolean(value) {
+  return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
 }
 
 function parseCookies(req) {
@@ -329,7 +332,7 @@ async function handleLogin(req, res) {
 
   sendJson(res, 200, {
     authenticated: true,
-    videoEnabled: isVideoAllowedTokenHash(tokenHash),
+    videoEnabled: VIDEO_FEATURE_ENABLED && (!VIDEO_ALLOWED_TOKEN_HASHES.size || isVideoAllowedTokenHash(tokenHash)),
   }, { "Set-Cookie": makeSessionCookie(req, sessionId, expiresAt) });
 }
 
@@ -380,27 +383,7 @@ function safeNanoAspectRatio(value) {
   return NANO_ASPECT_RATIOS.has(value) ? value : "1:1";
 }
 
-const SORA2_VIDEO_MODES = new Set(["text", "first-frame"]);
-const SORA2_VIDEO_MODELS = new Set([
-  "sora2-landscape-10s",
-  "sora2-landscape-15s",
-  "sora2-landscape-25s",
-  "sora2-portrait-10s",
-  "sora2-portrait-15s",
-  "sora2-portrait-25s",
-]);
-
-const SORA2_VIDEO_MODEL_ALIASES = {
-  "sora-video-landscape-10s": "sora2-landscape-10s",
-  "sora-video-landscape-15s": "sora2-landscape-15s",
-  "sora-video-portrait-10s": "sora2-portrait-10s",
-  "sora-video-portrait-15s": "sora2-portrait-15s",
-};
-
-function safeSora2VideoModel(value) {
-  const normalized = SORA2_VIDEO_MODEL_ALIASES[value] || value;
-  return SORA2_VIDEO_MODELS.has(normalized) ? normalized : "sora2-landscape-10s";
-}
+const VIDEO_MODES = new Set(["text", "first-frame"]);
 
 const GPT_MAX_LONG_SIDE = 3840;
 const GPT_MAX_SHORT_SIDE = 2160;
@@ -449,14 +432,14 @@ function normalizeJobParams(input) {
   if (mediaType === "video") {
     const prompt = String(input.prompt || "").trim();
     if (!prompt) throw httpError(400, "请先写下想生成的视频内容。");
-    const videoMode = SORA2_VIDEO_MODES.has(input.videoMode) ? input.videoMode : "text";
-    const sora2Model = safeSora2VideoModel(String(input.sora2Model || input.videoModel || "sora2-landscape-10s").trim());
+    const videoMode = VIDEO_MODES.has(input.videoMode) ? input.videoMode : "text";
+    const videoModel = String(input.videoModel || "default-video").trim() || "default-video";
     return {
       mediaType,
-      provider: "sora2",
+      provider: "video",
       mode: videoMode,
-      modelKey: "sora2",
-      sora2Model,
+      modelKey: videoModel,
+      videoModel,
       prompt,
     };
   }
@@ -573,6 +556,9 @@ async function createJob(req, res) {
 
   const { fields, file, files } = await parseJobRequest(req);
   const params = normalizeJobParams(fields);
+  if (params.mediaType === "video") {
+    throw httpError(501, "视频生成功能暂未开放。");
+  }
   if (params.mediaType === "video" && !canUseVideo(session)) {
     throw httpError(403, "当前访问密钥暂未开通视频生成。");
   }
@@ -976,122 +962,6 @@ async function parseOpenAiImageResponse(response, outputFormat, provider) {
   });
 }
 
-async function callSora2VideoModel(job) {
-  const params = JSON.parse(job.params_json);
-  let content = params.prompt;
-  if (job.source_image_path) {
-    const firstFrame = await readFile(safeVideoPath(job.source_image_path));
-    content = [
-      { type: "text", text: params.prompt },
-      {
-        type: "image_url",
-        image_url: {
-          url: `data:${job.source_image_mime || "image/png"};base64,${firstFrame.toString("base64")}`,
-        },
-      },
-    ];
-  }
-  const body = {
-    model: safeSora2VideoModel(params.sora2Model || "sora2-landscape-10s"),
-    stream: true,
-    messages: [
-      {
-        role: "user",
-        content,
-      },
-    ],
-  };
-
-  console.log("[image-service] requesting sora2 video", {
-    jobId: job.id,
-    baseUrl: SORA2_API_BASE_URL,
-    model: body.model,
-    mode: params.mode,
-    hasFirstFrame: Boolean(job.source_image_path),
-  });
-
-  const response = await fetchWithTimeout(`${SORA2_API_BASE_URL}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${SORA2_API_KEY}`,
-    },
-    body: JSON.stringify(body),
-    timeoutMs: VIDEO_REQUEST_TIMEOUT_MS,
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null);
-    throw new Error(readUpstreamError(payload, response));
-  }
-
-  const { text, rawBody } = await readSseText(response);
-  const video = parseSora2VideoResponse(text);
-  if (video.url) {
-    const videoResponse = await fetchWithTimeout(video.url, { timeoutMs: VIDEO_REQUEST_TIMEOUT_MS });
-    if (!videoResponse.ok) throw new Error("视频已经生成，但下载保存失败。");
-    return {
-      buffer: Buffer.from(await videoResponse.arrayBuffer()),
-      mime: videoResponse.headers.get("content-type")?.split(";")[0] || "video/mp4",
-    };
-  }
-  throw missingMediaError("video", { text }, "sora2", {
-    status: response.status,
-    contentType: response.headers.get("content-type"),
-    rawBody,
-  });
-}
-
-async function readSseText(response) {
-  const raw = await response.text();
-  const chunks = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
-    let payload;
-    try {
-      payload = JSON.parse(data);
-    } catch {
-      chunks.push(data);
-      continue;
-    }
-    const delta = payload?.choices?.[0]?.delta?.content;
-    const message = payload?.choices?.[0]?.message?.content;
-    if (delta) chunks.push(delta);
-    if (message) chunks.push(message);
-  }
-  return { text: chunks.join(""), rawBody: raw };
-}
-
-function parseSora2VideoResponse(text) {
-  const url = findNestedVideoUrl(text) || /https?:\/\/\S+/i.exec(text)?.[0]?.replace(/[)"'\],。]+$/, "");
-  return { url: url || null };
-}
-
-function findNestedVideoUrl(value, depth = 0) {
-  if (!value || depth > 5) return null;
-  if (typeof value === "string") {
-    return /^https?:\/\/.+\.(mp4|mov|webm)(\?|$)/i.test(value) ? value : null;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findNestedVideoUrl(item, depth + 1);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (typeof value !== "object") return null;
-  for (const key of ["main_url", "backup_url", "download_url", "play_url", "video_url", "url"]) {
-    const found = findNestedVideoUrl(value[key], depth + 1);
-    if (found) return found;
-  }
-  for (const item of Object.values(value)) {
-    const found = findNestedVideoUrl(item, depth + 1);
-    if (found) return found;
-  }
-  return null;
-}
-
 function readUpstreamError(payload, response) {
   return payload?.error?.message || payload?.message || payload?.detail || `生成失败，请稍后重试。(${response.status})`;
 }
@@ -1140,9 +1010,10 @@ async function workerTick() {
 
 async function processJob(job) {
   try {
-    const media = job.media_type === "video"
-      ? await callSora2VideoModel(job)
-      : await callImageModel(job, decryptToken(job));
+    if (job.media_type === "video") {
+      throw new Error("视频生成功能暂未开放。");
+    }
+    const media = await callImageModel(job, decryptToken(job));
     const ext = contentTypeToExtension(media.mime, job.media_type === "video" ? "mp4" : "png");
     const slug = `${randomId(24)}.${ext}`;
     const relativePath = path.join("results", new Date().toISOString().slice(0, 10), slug);

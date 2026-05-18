@@ -144,13 +144,13 @@ const resolutionOptions = ["512", "1K", "2K", "4K"].map((value) => ({
   label: value,
 }));
 
-const sora2VideoModelOptions = [
-  { value: "sora2-landscape-10s", label: "横屏 10 秒" },
-  { value: "sora2-landscape-15s", label: "横屏 15 秒" },
-  { value: "sora2-landscape-25s", label: "横屏 25 秒" },
-  { value: "sora2-portrait-10s", label: "竖屏 10 秒" },
-  { value: "sora2-portrait-15s", label: "竖屏 15 秒" },
-  { value: "sora2-portrait-25s", label: "竖屏 25 秒" },
+const videoModelOptions = [
+  { value: "landscape-10s", label: "横屏 10 秒" },
+  { value: "landscape-15s", label: "横屏 15 秒" },
+  { value: "landscape-25s", label: "横屏 25 秒" },
+  { value: "portrait-10s", label: "竖屏 10 秒" },
+  { value: "portrait-15s", label: "竖屏 15 秒" },
+  { value: "portrait-25s", label: "竖屏 25 秒" },
 ].map((value) => ({
   value: value.value,
   label: value.label,
@@ -230,7 +230,7 @@ function makePreviewJob({ mediaType, mode, modelKey, prompt, params }) {
     id: `preview-${timestamp}`,
     status: "queued",
     mediaType,
-    provider: mediaType === MEDIA_TYPES.VIDEO ? "sora2" : modelKey === MODEL_KEYS.NANO ? "gemini" : "openai",
+    provider: mediaType === MEDIA_TYPES.VIDEO ? "video" : modelKey === MODEL_KEYS.NANO ? "gemini" : "openai",
     mode,
     modelKey,
     prompt,
@@ -275,16 +275,20 @@ function App() {
   const [sourcePreview, setSourcePreview] = useState("");
   const [sourceImageSize, setSourceImageSize] = useState(null);
   const [videoMode, setVideoMode] = useState(VIDEO_MODES.TEXT);
-  const [videoModel, setVideoModel] = useState("sora2-landscape-10s");
+  const [videoModel, setVideoModel] = useState("landscape-10s");
   const [firstFrame, setFirstFrame] = useState(null);
   const [firstFramePreview, setFirstFramePreview] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const sourcePreviewId = useRef(0);
 
+  const visibleJobs = useMemo(() => (
+    jobs.filter((job) => (job.mediaType || MEDIA_TYPES.IMAGE) === mediaType)
+  ), [jobs, mediaType]);
   const selectedJob = useMemo(() => (
-    jobs.find((job) => job.id === selectedJobId) || jobs[0] || null
-  ), [jobs, selectedJobId]);
-  const activeJob = jobs.find((job) => job.status === "processing" || job.status === "queued");
+    visibleJobs.find((job) => job.id === selectedJobId) || visibleJobs[0] || null
+  ), [visibleJobs, selectedJobId]);
+  const activeJob = visibleJobs.find((job) => job.status === "processing" || job.status === "queued");
+  const historyTitle = mediaType === MEDIA_TYPES.VIDEO ? "视频历史记录" : "图片历史记录";
   const presetGptSize = gptSizeMap[gptResolution]?.[gptAspectRatio] || "1024x1024";
   const presetGptValidation = validateGptSizeString(presetGptSize);
   const customGptValidation = validateGptDimensions(gptCustomWidth, gptCustomHeight);
@@ -514,9 +518,9 @@ function App() {
       if (mediaType === MEDIA_TYPES.VIDEO) {
         const fields = {
           mediaType: MEDIA_TYPES.VIDEO,
-          provider: "sora2",
+          provider: "video",
           videoMode,
-          sora2Model: videoModel,
+          videoModel,
           prompt: cleanPrompt,
         };
         previewJob = makePreviewJob({
@@ -702,7 +706,14 @@ function App() {
           {mediaType === MEDIA_TYPES.IMAGE && mode === "edit" ? (
             <div className="uploadBox">
               <label>
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => updateSourceImage(event.target.files?.[0])} />
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) => {
+                    updateSourceImage(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                />
                 {sourcePreview ? <img src={sourcePreview} alt="参考图预览" /> : <span><ImageIcon size={28} />上传参考图片</span>}
               </label>
               {sourceImage ? <button type="button" className="textBtn" onClick={clearSourceImage}>移除图片</button> : null}
@@ -711,7 +722,7 @@ function App() {
 
           {mediaType === MEDIA_TYPES.VIDEO ? (
             <>
-              <SelectField label="视频模型" value={videoModel} onChange={setVideoModel} options={sora2VideoModelOptions} />
+              <SelectField label="视频规格" value={videoModel} onChange={setVideoModel} options={videoModelOptions} />
               {videoMode !== VIDEO_MODES.TEXT ? (
                 <FrameUpload
                   label="上传首帧图片"
@@ -810,7 +821,7 @@ function App() {
           <section className={historyOpen ? "historyPanel open" : "historyPanel"}>
             <div className="historyHead">
               <button className="historyToggle" type="button" onClick={() => setHistoryOpen((value) => !value)}>
-                <PanelTitle icon={Clock3} title="历史记录" subtitle={activeJob ? statusText[activeJob.status] : `${jobs.length} 条记录`} />
+                <PanelTitle icon={Clock3} title={historyTitle} subtitle={activeJob ? statusText[activeJob.status] : `${visibleJobs.length} 条记录`} />
                 {historyOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
               </button>
               {historyOpen ? (
@@ -819,7 +830,7 @@ function App() {
                 </button>
               ) : null}
             </div>
-            {historyOpen ? <JobList jobs={jobs} selectedId={selectedJob?.id} onSelect={setSelectedJobId} /> : null}
+            {historyOpen ? <JobList jobs={visibleJobs} selectedId={selectedJob?.id} onSelect={setSelectedJobId} /> : null}
           </section>
         </div>
       </section>
@@ -869,7 +880,14 @@ function FrameUpload({ label, preview, onChange, onClear }) {
   return (
     <div className="uploadBox frameUpload">
       <label>
-        <input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => onChange(event.target.files?.[0])} />
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          onChange={(event) => {
+            onChange(event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
         {preview ? <img src={preview} alt={`${label}预览`} /> : <span><ImageIcon size={26} />{label}</span>}
       </label>
       {preview ? <button type="button" className="textBtn" onClick={onClear}>移除图片</button> : null}

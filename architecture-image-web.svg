@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180">
+  <defs>
+    <style>
+      .bg { fill: #f7f8fb; }
+      .title { font: 700 42px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #172033; }
+      .subtitle { font: 400 22px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #5b6475; }
+      .cluster-title { font: 700 24px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #273247; }
+      .box-title { font: 700 26px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #172033; }
+      .box-text { font: 400 19px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #3f4858; }
+      .small { font: 400 17px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #5b6475; }
+      .label { font: 700 18px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #344054; }
+      .note { font: 400 17px "Microsoft YaHei", "PingFang SC", Arial, sans-serif; fill: #667085; }
+      .cluster { fill: #ffffff; stroke: #d8dee9; stroke-width: 2; rx: 20; }
+      .edge-cluster { fill: #f0f7ff; stroke: #b6d7ff; }
+      .app-cluster { fill: #f8fbff; stroke: #c7d8f2; }
+      .data-cluster { fill: #fbfaf7; stroke: #e3d8bd; }
+      .upstream-cluster { fill: #f7fbf8; stroke: #bfdcc6; }
+      .user-box { fill: #ffffff; stroke: #8aa4c8; stroke-width: 2.5; rx: 18; }
+      .nginx-box { fill: #e6f2ff; stroke: #5a9de2; stroke-width: 2.5; rx: 16; }
+      .image-box { fill: #fff3e6; stroke: #e69a4c; stroke-width: 2.5; rx: 16; }
+      .newapi-box { fill: #edf7ed; stroke: #56a35c; stroke-width: 2.5; rx: 16; }
+      .downstream-box { fill: #f1edff; stroke: #8065c9; stroke-width: 2.5; rx: 16; }
+      .data-box { fill: #fffaf0; stroke: #c4a15c; stroke-width: 2.2; rx: 14; }
+      .upstream-box { fill: #effaf1; stroke: #5faf6a; stroke-width: 2.2; rx: 14; }
+      .arrow { fill: none; stroke: #42526e; stroke-width: 3; marker-end: url(#arrow); }
+      .arrow-soft { fill: none; stroke: #6b778c; stroke-width: 2.5; marker-end: url(#arrow-soft); }
+      .arrow-dash { fill: none; stroke: #6b778c; stroke-width: 2.5; stroke-dasharray: 8 8; marker-end: url(#arrow-soft); }
+      .data-line { fill: none; stroke: #9b7b32; stroke-width: 2.5; marker-end: url(#arrow-data); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#42526e"/>
+    </marker>
+    <marker id="arrow-soft" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b778c"/>
+    </marker>
+    <marker id="arrow-data" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9b7b32"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#101828" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <rect class="bg" width="1800" height="1180"/>
+  <text class="title" x="70" y="72">image-web 整体架构图</text>
+  <text class="subtitle" x="70" y="111">忽略视频生成链路；new-api 是面向用户的统一网关，cliproxyapi 与 chatgpt2api 是其下游能力。</text>
+
+  <!-- clusters -->
+  <rect class="cluster edge-cluster" x="420" y="155" width="320" height="845" filter="url(#shadow)"/>
+  <text class="cluster-title" x="452" y="199">公网入口</text>
+
+  <rect class="cluster app-cluster" x="805" y="155" width="615" height="845" filter="url(#shadow)"/>
+  <text class="cluster-title" x="837" y="199">image-web 部署栈</text>
+
+  <rect class="cluster data-cluster" x="885" y="1018" width="505" height="120" filter="url(#shadow)"/>
+  <text class="cluster-title" x="916" y="1060">本地持久化</text>
+
+  <rect class="cluster upstream-cluster" x="1490" y="292" width="245" height="470" filter="url(#shadow)"/>
+  <text class="cluster-title" x="1518" y="335">外部上游</text>
+
+  <!-- user -->
+  <rect class="user-box" x="70" y="427" width="255" height="165" filter="url(#shadow)"/>
+  <text class="box-title" x="113" y="481">用户 / 客户端</text>
+  <text class="box-text" x="116" y="522">浏览器</text>
+  <text class="box-text" x="116" y="554">API 调用方</text>
+
+  <!-- nginx -->
+  <rect class="nginx-box" x="470" y="420" width="220" height="180" filter="url(#shadow)"/>
+  <text class="box-title" x="539" y="480">nginx</text>
+  <text class="box-text" x="523" y="522">80 / 443</text>
+  <text class="box-text" x="508" y="554">TLS、反向代理</text>
+
+  <!-- app boxes -->
+  <rect class="image-box" x="865" y="258" width="300" height="175" filter="url(#shadow)"/>
+  <text class="box-title" x="934" y="313">image-service</text>
+  <text class="box-text" x="909" y="354">图片工作台</text>
+  <text class="box-text" x="909" y="386">/image /image-api /images</text>
+
+  <rect class="newapi-box" x="865" y="543" width="300" height="185" filter="url(#shadow)"/>
+  <text class="box-title" x="960" y="599">new-api</text>
+  <text class="box-text" x="908" y="640">统一网关</text>
+  <text class="box-text" x="908" y="672">用户、Token、计费</text>
+  <text class="box-text" x="908" y="704">渠道路由</text>
+
+  <rect class="downstream-box" x="1215" y="455" width="170" height="155" filter="url(#shadow)"/>
+  <text class="box-title" x="1245" y="508">cliproxyapi</text>
+  <text class="box-text" x="1238" y="548">渠道账号</text>
+  <text class="box-text" x="1238" y="579">订阅、转发</text>
+
+  <rect class="downstream-box" x="1215" y="670" width="170" height="165" filter="url(#shadow)"/>
+  <text class="box-title" x="1232" y="724">chatgpt2api</text>
+  <text class="box-text" x="1238" y="764">模拟网页</text>
+  <text class="box-text" x="1238" y="795">ChatGPT 图片生成</text>
+
+  <!-- upstream -->
+  <rect class="upstream-box" x="1522" y="397" width="180" height="120" filter="url(#shadow)"/>
+  <text class="box-title" x="1562" y="449">AI 渠道</text>
+  <text class="box-text" x="1550" y="482">模型供应商</text>
+
+  <rect class="upstream-box" x="1522" y="621" width="180" height="120" filter="url(#shadow)"/>
+  <text class="box-title" x="1544" y="674">网页 ChatGPT</text>
+  <text class="box-text" x="1568" y="706">图片能力</text>
+
+  <!-- data boxes -->
+  <rect class="data-box" x="920" y="1080" width="150" height="42"/>
+  <text class="small" x="947" y="1107">image DB / 文件</text>
+
+  <rect class="data-box" x="1095" y="1080" width="135" height="42"/>
+  <text class="small" x="1122" y="1107">new-api 数据</text>
+
+  <rect class="data-box" x="1255" y="1080" width="105" height="42"/>
+  <text class="small" x="1274" y="1107">渠道配置</text>
+
+  <!-- main arrows from user to nginx -->
+  <path class="arrow" d="M 325 470 C 365 470, 405 470, 468 470"/>
+  <text class="label" x="342" y="446">访问 /image</text>
+
+  <path class="arrow" d="M 325 552 C 365 552, 405 552, 468 552"/>
+  <text class="label" x="342" y="590">OpenAI 兼容 API</text>
+
+  <!-- nginx routing -->
+  <path class="arrow" d="M 690 458 C 760 410, 790 365, 862 343"/>
+  <text class="label" x="704" y="410">/image /image-api /images</text>
+
+  <path class="arrow" d="M 690 552 C 760 590, 792 625, 862 636"/>
+  <text class="label" x="709" y="606">OpenAI 兼容 API</text>
+
+  <!-- image service to new api -->
+  <path class="arrow-soft" d="M 1015 433 C 1015 475, 1015 502, 1015 540"/>
+  <text class="label" x="1031" y="479">Token 校验</text>
+  <text class="small" x="1031" y="504">/v1/models</text>
+
+  <path class="arrow-soft" d="M 970 433 C 910 482, 890 504, 913 542"/>
+  <text class="label" x="828" y="486">图片生成请求</text>
+
+  <!-- new api downstream -->
+  <path class="arrow" d="M 1165 610 C 1192 586, 1200 565, 1213 538"/>
+  <text class="label" x="1178" y="525">渠道转发</text>
+
+  <path class="arrow" d="M 1165 686 C 1192 708, 1200 730, 1213 751"/>
+  <text class="label" x="1172" y="670">网页通道</text>
+
+  <!-- downstream to upstream -->
+  <path class="arrow" d="M 1385 526 C 1435 506, 1472 485, 1519 466"/>
+  <text class="label" x="1401" y="486">请求真实渠道</text>
+
+  <path class="arrow" d="M 1385 749 C 1433 730, 1471 705, 1519 687"/>
+  <text class="label" x="1397" y="707">模拟网页请求</text>
+
+  <!-- data lines -->
+  <path class="data-line" d="M 1015 728 C 1000 870, 995 986, 995 1077"/>
+  <path class="data-line" d="M 1048 728 C 1095 880, 1135 987, 1162 1077"/>
+  <path class="data-line" d="M 1368 610 C 1428 790, 1380 960, 1308 1077"/>
+
+  <!-- management port note -->
+  <rect x="456" y="720" width="248" height="86" fill="#ffffff" stroke="#b6d7ff" stroke-width="1.5" rx="12"/>
+  <text class="note" x="476" y="754">cliproxyapi 管理端口</text>
+  <text class="note" x="476" y="783">仅本机：127.0.0.1:8317</text>
+
+  <!-- legend -->
+  <rect x="70" y="1018" width="745" height="120" fill="#ffffff" stroke="#d8dee9" stroke-width="2" rx="16" filter="url(#shadow)"/>
+  <text class="cluster-title" x="100" y="1060">说明</text>
+  <text class="note" x="100" y="1094">1. new-api 面向用户：统一处理鉴权、Token、计费与路由。</text>
+  <text class="note" x="100" y="1124">2. image-service 只是图片工作台与异步任务层，最终仍通过 new-api 调用模型能力。</text>
+</svg>

@@ -52,7 +52,8 @@ http://127.0.0.1:5173/image/
 
 Deployment files now live in `deploy/`:
 
-- `deploy/docker-compose.yml` is the canonical server Compose file for New-API, CLIProxyAPI, image-service, chatgpt2api, and nginx.
+- `deploy/docker-compose.yml` is the base server Compose file for New-API, CLIProxyAPI, and chatgpt2api.
+- `deploy/docker-compose.override.yml` adds image-service and nginx on top of the base Compose file.
 - `deploy/api.domaeng.com.conf` is the canonical nginx config mounted by the Compose file.
 - `deploy/.env.example` lists the environment variables that can be copied to `deploy/.env` on the server.
 

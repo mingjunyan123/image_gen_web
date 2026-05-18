@@ -1,0 +1,109 @@
+services:
+  new-api:
+    image: calciumion/new-api:latest
+    container_name: new-api
+    restart: always
+    command: --log-dir /app/logs
+    environment:
+      TZ: Asia/Singapore
+      SESSION_SECRET: "${NEW_API_SESSION_SECRET:-dxqHdcY0zbOC8dPqqsyHw9RVXIobhcig5fkdRChp57Q84svOldTAT5d1eK5EpE5m}"
+      CRYPTO_SECRET: "${NEW_API_CRYPTO_SECRET:-CRe6uym99Ognok64OCNrlKC1NPcm9x8g5pn6OAHhaLPXnnxNGAfY26xv7TWjXRqg}"
+      FRONTEND_BASE_URL: "${NEW_API_FRONTEND_BASE_URL:-https://domaeng.com}"
+      STREAMING_TIMEOUT: "${NEW_API_STREAMING_TIMEOUT:-600}"
+      RELAY_TIMEOUT: "${NEW_API_RELAY_TIMEOUT:-600}"
+      BATCH_UPDATE_ENABLED: "${NEW_API_BATCH_UPDATE_ENABLED:-false}"
+    volumes:
+      - ../new-api-data:/data
+      - ../new-api-logs:/app/logs
+    expose:
+      - "3000"
+    networks:
+      - ai-gateway
+
+  cliproxyapi:
+    image: eceasy/cli-proxy-api:latest
+    container_name: cliproxyapi
+    restart: always
+    environment:
+      TZ: Asia/Singapore
+    volumes:
+      - ../cliproxyapi/config.yaml:/CLIProxyAPI/config.yaml
+      - ../cliproxyapi/auths:/root/.cli-proxy-api
+      - ../cliproxyapi/logs:/CLIProxyAPI/logs
+    expose:
+      - "8317"
+    ports:
+      - "127.0.0.1:8317:8317"
+    networks:
+      - ai-gateway
+
+  image-service:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: image-service
+    restart: always
+    environment:
+      TZ: Asia/Singapore
+      PORT: "${IMAGE_SERVICE_PORT:-3000}"
+      NEW_API_BASE_URL: "${NEW_API_BASE_URL:-http://new-api:3000}"
+      IMAGE_DATA_DIR: "${IMAGE_DATA_DIR:-/data/image-service}"
+      IMAGE_SERVICE_SECRET: "${IMAGE_SERVICE_SECRET:-c55ba91a3eea2c6a03692c46fcdbcd8ab29bfc0091f5de115dff51b3261583a9}"
+      IMAGE_SESSION_DAYS: "${IMAGE_SESSION_DAYS:-7}"
+      IMAGE_MAX_GLOBAL_PROCESSING: "${IMAGE_MAX_GLOBAL_PROCESSING:-1}"
+      IMAGE_MAX_TOKEN_PROCESSING: "${IMAGE_MAX_TOKEN_PROCESSING:-1}"
+      IMAGE_MAX_TOKEN_QUEUED: "${IMAGE_MAX_TOKEN_QUEUED:-5}"
+      IMAGE_WORKER_INTERVAL_MS: "${IMAGE_WORKER_INTERVAL_MS:-1500}"
+      IMAGE_REQUEST_TIMEOUT_MS: "${IMAGE_REQUEST_TIMEOUT_MS:-600000}"
+      IMAGE_MAX_UPLOAD_BYTES: "${IMAGE_MAX_UPLOAD_BYTES:-52428800}"
+      IMAGE_VIDEO_FEATURE_ENABLED: "${IMAGE_VIDEO_FEATURE_ENABLED:-false}"
+      VIDEO_ALLOWED_TOKENS: "${VIDEO_ALLOWED_TOKENS:-}"
+      VIDEO_ALLOWED_TOKEN_HASHES: "${VIDEO_ALLOWED_TOKEN_HASHES:-}"
+    volumes:
+      - ../image-service-data:/data/image-service
+    expose:
+      - "3000"
+    depends_on:
+      - new-api
+    networks:
+      - ai-gateway
+
+  chatgpt2api:
+    image: ghcr.io/basketikun/chatgpt2api:latest
+    container_name: chatgpt2api
+    restart: always
+    environment:
+      TZ: Asia/Singapore
+      STORAGE_BACKEND: json
+    volumes:
+      - ../chatgpt2api-data:/app/data
+      - ../chatgpt2api/config.json:/app/config.json
+    expose:
+      - "80"
+    ports:
+      - "127.0.0.1:8023:80"
+    networks:
+      - ai-gateway
+
+  nginx:
+    image: nginx:stable
+    container_name: nginx
+    restart: always
+    depends_on:
+      - new-api
+      - cliproxyapi
+      - image-service
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./api.domaeng.com.conf:/etc/nginx/conf.d/api.domaeng.com.conf:ro
+      - ../certbot/www:/var/www/certbot
+      - ../certbot/conf:/etc/letsencrypt
+      - ../static:/usr/share/nginx/html/static:ro
+    networks:
+      - ai-gateway
+
+networks:
+  ai-gateway:
+    driver: bridge

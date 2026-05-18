@@ -50,6 +50,19 @@ http://127.0.0.1:5173/image/
 
 ## Deployment
 
+Deployment files now live in `deploy/`:
+
+- `deploy/docker-compose.yml` is the canonical server Compose file for New-API, CLIProxyAPI, image-service, chatgpt2api, and nginx.
+- `deploy/api.domaeng.com.conf` is the canonical nginx config mounted by the Compose file.
+- `deploy/.env.example` lists the environment variables that can be copied to `deploy/.env` on the server.
+
+Run from the `deploy/` directory on the server:
+
+```bash
+cd /opt/image-web/deploy
+docker compose up -d --build
+```
+
 The container runs Node.js, not nginx. It builds the React page and then starts:
 
 ```text
@@ -59,7 +72,7 @@ node --experimental-sqlite server/index.mjs
 Required persistent volume:
 
 ```text
-./image-service-data:/data/image-service
+../image-service-data:/data/image-service
 ```
 
 Important environment variables:
@@ -79,7 +92,7 @@ Important environment variables:
 
 `IMAGE_SERVICE_SECRET` protects saved user tokens. Set it once and keep it stable. If it changes, previously saved encrypted tokens cannot be used by unfinished jobs.
 
-For Docker Compose deployments, the image-service queue and upload settings are read from environment variables, so changing concurrency normally only requires editing the server `.env` file and recreating the container, not changing source code. Video UI code is intentionally kept in the frontend but disabled by default, and the backend currently rejects new video generation jobs until a new provider is added.
+For Docker Compose deployments, the image-service queue and upload settings are read from environment variables, so changing concurrency normally only requires editing `deploy/.env` and recreating the container, not changing source code. Video UI code is intentionally kept in the frontend but disabled by default, and the backend currently rejects new video generation jobs until a new provider is added.
 
 Nginx should route:
 
@@ -100,7 +113,7 @@ docker exec image-service node --experimental-sqlite scripts/backup.mjs
 Backups are written to:
 
 ```text
-./image-service-data/backups/
+../image-service-data/backups/
 ```
 
 The backup includes:

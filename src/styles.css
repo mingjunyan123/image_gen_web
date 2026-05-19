@@ -477,6 +477,29 @@ textarea:focus {
   color: #9f2d20;
 }
 
+.sizeFixOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sizeFixOptions button {
+  border: 1px solid #b8c9c1;
+  background: #f8fbf9;
+  color: #173c34;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.sizeFixOptions button:hover {
+  border-color: #1d6b58;
+  background: #eef7f3;
+}
+
 .warningBox {
   color: #6e4b00;
   background: #fff7df;

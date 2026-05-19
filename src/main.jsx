@@ -23,6 +23,7 @@ import "./styles.css";
 
 const MODEL_KEYS = {
   GPT: "gpt",
+  CHATGPT: "chatgpt",
   NANO: "nano",
 };
 
@@ -52,6 +53,10 @@ const modelOptions = [
   {
     value: MODEL_KEYS.GPT,
     name: "GPT Image 2",
+  },
+  {
+    value: MODEL_KEYS.CHATGPT,
+    name: "ChatGPT Image 2",
   },
   {
     value: MODEL_KEYS.NANO,
@@ -138,6 +143,15 @@ const nanoAspectRatioOptions = ["21:9", "8:1", "4:1", "16:9", "3:2", "4:3", "5:4
   value,
   label: value,
 }));
+
+const chatgptAspectRatioOptions = [
+  { value: "auto", label: "自动" },
+  { value: "16:9", label: "16:9" },
+  { value: "4:3", label: "4:3" },
+  { value: "1:1", label: "1:1" },
+  { value: "3:4", label: "3:4" },
+  { value: "9:16", label: "9:16" },
+];
 
 const resolutionOptions = ["512", "1K", "2K", "4K"].map((value) => ({
   value,
@@ -290,6 +304,7 @@ function App() {
   const [quality, setQuality] = useState("auto");
   const [outputFormat, setOutputFormat] = useState("png");
   const [outputCompression, setOutputCompression] = useState(82);
+  const [chatgptAspectRatio, setChatgptAspectRatio] = useState("auto");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [resolution, setResolution] = useState("1K");
   const [sourceImage, setSourceImage] = useState(null);
@@ -576,6 +591,12 @@ function App() {
         outputFormat,
         outputCompression,
         moderation: "auto",
+      } : modelKey === MODEL_KEYS.CHATGPT ? {
+        mediaType: MEDIA_TYPES.IMAGE,
+        mode,
+        modelKey,
+        prompt: cleanPrompt,
+        aspectRatio: chatgptAspectRatio,
       } : {
         mediaType: MEDIA_TYPES.IMAGE,
         mode,
@@ -840,6 +861,8 @@ function App() {
                     </label>
                   ) : null}
                 </>
+              ) : modelKey === MODEL_KEYS.CHATGPT ? (
+                <SelectField label="画面比例" value={chatgptAspectRatio} onChange={setChatgptAspectRatio} options={chatgptAspectRatioOptions} />
               ) : (
                 <div className="twoCols">
                   <SelectField label="画面比例" value={aspectRatio} onChange={setAspectRatio} options={nanoAspectRatioOptions} />

@@ -378,9 +378,14 @@ function safeOutputFormat(value) {
 }
 
 const NANO_ASPECT_RATIOS = new Set(["21:9", "8:1", "4:1", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16", "1:4", "1:8"]);
+const CHATGPT_ASPECT_RATIOS = new Set(["auto", "16:9", "4:3", "1:1", "3:4", "9:16"]);
 
 function safeNanoAspectRatio(value) {
   return NANO_ASPECT_RATIOS.has(value) ? value : "1:1";
+}
+
+function safeChatgptAspectRatio(value) {
+  return CHATGPT_ASPECT_RATIOS.has(value) ? value : "auto";
 }
 
 const VIDEO_MODES = new Set(["text", "first-frame"]);
@@ -445,7 +450,8 @@ function normalizeJobParams(input) {
   }
 
   const mode = input.mode === "edit" ? "edit" : "generate";
-  const modelKey = input.modelKey === "nano" ? "nano" : "gpt";
+  const requestedModelKey = String(input.modelKey || "").trim();
+  const modelKey = requestedModelKey === "nano" || requestedModelKey === "chatgpt" ? requestedModelKey : "gpt";
   const prompt = String(input.prompt || "").trim();
   if (!prompt) throw httpError(400, "请先写下想生成的内容。");
 
@@ -469,7 +475,9 @@ function normalizeJobParams(input) {
     outputFormat,
     outputCompression,
     moderation: input.moderation === "low" ? "low" : "auto",
-    aspectRatio: safeNanoAspectRatio(String(input.aspectRatio || "1:1")),
+    aspectRatio: modelKey === "chatgpt"
+      ? safeChatgptAspectRatio(String(input.aspectRatio || "auto"))
+      : safeNanoAspectRatio(String(input.aspectRatio || "1:1")),
     resolution: ["512", "1K", "2K", "4K"].includes(input.resolution) ? input.resolution : "1K",
   };
   return params;
@@ -888,6 +896,42 @@ async function callImageModel(job, token) {
       });
     }
     return { buffer: Buffer.from(image.b64, "base64"), mime: image.mime };
+  }
+
+  if (params.modelKey === "chatgpt") {
+    const model = "chatgpt-image-2";
+    if (params.mode === "edit") {
+      const formData = new FormData();
+      formData.append("model", model);
+      formData.append("prompt", params.prompt);
+      formData.append("n", "1");
+      formData.append("aspect_ratio", params.aspectRatio || "auto");
+      const source = await readFile(safeImagePath(job.source_image_path));
+      formData.append("image", new Blob([source], { type: job.source_image_mime }), job.source_image_name || "image.png");
+
+      const response = await fetchWithTimeout(`${NEW_API_BASE_URL}/v1/images/edits`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      return await parseOpenAiImageResponse(response, "png", "openai-chatgpt-edits");
+    }
+
+    const body = {
+      model,
+      prompt: params.prompt,
+      n: 1,
+      aspect_ratio: params.aspectRatio || "auto",
+    };
+    const response = await fetchWithTimeout(`${NEW_API_BASE_URL}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    return await parseOpenAiImageResponse(response, "png", "openai-chatgpt-generations");
   }
 
   if (params.mode === "edit") {
